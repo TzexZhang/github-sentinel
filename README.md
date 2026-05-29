@@ -38,8 +38,11 @@ github-sentinel/
 
 本项目使用 `uv` 管理 Python 版本、虚拟环境和依赖，不依赖系统 Python。
 
+首次启动前需要在项目根目录手动创建 SQLite 数据库文件 `github_sentinel.db`。应用启动时会基于该文件创建缺失的数据表。
+
 ```powershell
 uv sync --group dev
+New-Item -ItemType File -Path .\github_sentinel.db -Force
 uv run python -m uvicorn app.main:create_app --factory --reload
 ```
 
