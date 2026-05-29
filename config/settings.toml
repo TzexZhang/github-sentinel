@@ -1,0 +1,5 @@
+[app]
+name = "GitHub Sentinel"
+
+[database]
+url = "sqlite+aiosqlite:///./github_sentinel.db"
