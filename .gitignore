@@ -7,3 +7,5 @@ __pycache__/
 *.sqlite
 *.sqlite3
 *.pyc
+
+PROJECT_STRUCTURE.md

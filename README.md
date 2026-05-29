@@ -26,6 +26,7 @@ github-sentinel/
 ├── config/
 │   └── settings.toml        # 非敏感默认配置，敏感配置通过环境变量注入
 ├── tests/                   # pytest 测试：API、Dashboard、仓储和 Agent 编排行为
+├── LICENSE                  # MIT 开源协议
 ├── pyproject.toml           # 项目元数据、依赖、pytest 与 Ruff 配置
 ├── uv.lock                  # uv 锁定文件，保证依赖版本可复现
 └── README.md                # 项目说明文档
@@ -140,6 +141,10 @@ $env:TOKEN_ENCRYPTION_KEY="上一步生成的 key"
 uv run pytest
 uv run ruff check .
 ```
+
+## 开源协议
+
+本项目采用 MIT License 开源，详见 [LICENSE](LICENSE)。
 
 ## 当前首版能力
 
