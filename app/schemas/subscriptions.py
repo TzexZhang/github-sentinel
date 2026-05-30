@@ -3,7 +3,7 @@
 订阅创建只接收仓库地址、访问令牌、订阅间隔和通知通道；平台、owner、repo 由仓库地址解析得到。
 """
 from datetime import datetime
-from typing import Literal
+from typing import Literal, cast
 
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, computed_field, model_validator
 
@@ -32,7 +32,7 @@ class SubscriptionCreate(BaseModel):
     @property
     def platform(self) -> Platform:
         """从仓库地址中推导代码托管平台。"""
-        return parse_repository_url(self.repository_url).platform  # type: ignore[return-value]
+        return cast(Platform, parse_repository_url(self.repository_url).platform)
 
     @computed_field
     @property

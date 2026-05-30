@@ -7,7 +7,7 @@ from app.services.sentinel import SentinelAgent
 
 class FakeGitHubClient:
     def __init__(self) -> None:
-        self.calls: list[tuple[str, str, str]] = []
+        self.calls: list[tuple[str, str, str, datetime | None]] = []
 
     async def fetch_repository_activity(
         self,
@@ -17,12 +17,19 @@ class FakeGitHubClient:
         access_token_encrypted: str,
         since: datetime | None,
     ) -> list[GitHubActivity]:
-        self.calls.append((platform, owner, repo))
+        self.calls.append((platform, owner, repo, since))
         return [
             GitHubActivity(
                 external_id="github:event-1",
                 event_type="PushEvent",
-                title="补充抓取逻辑",
+                title="Add report flow",
+                url="https://github.com/acme/sentinel",
+                occurred_at=datetime(2026, 5, 29, tzinfo=timezone.utc),
+            ),
+            GitHubActivity(
+                external_id="github:event-1",
+                event_type="PushEvent",
+                title="Add report flow",
                 url="https://github.com/acme/sentinel",
                 occurred_at=datetime(2026, 5, 29, tzinfo=timezone.utc),
             ),
@@ -31,7 +38,8 @@ class FakeGitHubClient:
 
 class FakeReportRenderer:
     def render_digest(self, owner: str, repo: str, activities: list[GitHubActivity]) -> str:
-        return f"{owner}/{repo} 新增 {len(activities)} 条动态"
+        titles = ", ".join(activity.title for activity in activities)
+        return f"# {owner}/{repo}\n\n{titles}"
 
 
 class FakeNotificationSender:
@@ -39,7 +47,18 @@ class FakeNotificationSender:
         return None
 
 
-async def test_run_subscription_endpoint_fetches_events_and_generates_report(client):
+async def _create_subscription(client) -> int:
+    create_response = await client.post(
+        "/api/subscriptions",
+        json={
+            "repository_url": "https://github.com/acme/sentinel",
+            "interval_seconds": 60,
+        },
+    )
+    return create_response.json()["data"]["id"]
+
+
+async def test_run_subscription_endpoint_fetches_since_interval_and_generates_report(client):
     fake_client = FakeGitHubClient()
 
     async def override_get_sentinel_agent() -> SentinelAgent:
@@ -50,15 +69,7 @@ async def test_run_subscription_endpoint_fetches_events_and_generates_report(cli
         )
 
     client._transport.app.dependency_overrides[get_sentinel_agent] = override_get_sentinel_agent
-
-    create_response = await client.post(
-        "/api/subscriptions",
-        json={
-            "repository_url": "https://github.com/acme/sentinel",
-            "interval_seconds": 60,
-        },
-    )
-    subscription_id = create_response.json()["data"]["id"]
+    subscription_id = await _create_subscription(client)
 
     run_response = await client.post(f"/api/subscriptions/{subscription_id}/run")
 
@@ -66,12 +77,49 @@ async def test_run_subscription_endpoint_fetches_events_and_generates_report(cli
     payload = run_response.json()
     assert payload["success"] is True
     assert payload["data"]["subscription_id"] == subscription_id
-    assert payload["data"]["fetched_events"] == 1
-    assert payload["data"]["stored_events"] == 1
+    assert payload["data"]["fetched_events"] == 0
+    assert payload["data"]["stored_events"] == 0
     assert payload["data"]["report_id"] is not None
-    assert fake_client.calls == [("github", "acme", "sentinel")]
+    assert fake_client.calls[0][:3] == ("github", "acme", "sentinel")
+    assert fake_client.calls[0][3] is not None
 
-    reports_response = await client.get("/api/reports")
+    reports_response = await client.get(f"/api/subscriptions/{subscription_id}/reports")
     reports = reports_response.json()["data"]
-    assert reports[0]["title"] == "acme/sentinel 仓库更新摘要（60 秒订阅）"
-    assert reports[0]["summary"] == "acme/sentinel 新增 1 条动态"
+    assert reports == [
+        {
+            "id": payload["data"]["report_id"],
+            "subscription_id": subscription_id,
+            "name": "acme_sentinel_2026-05-30",
+            "generated_at": reports[0]["generated_at"],
+            "content_markdown": "# acme/sentinel\n\n",
+        },
+    ]
+
+
+async def test_generate_report_with_date_range_fetches_updates_then_reads_stored_events(client):
+    fake_client = FakeGitHubClient()
+
+    async def override_get_sentinel_agent() -> SentinelAgent:
+        return SentinelAgent(
+            github_client=fake_client,
+            report_renderer=FakeReportRenderer(),
+            notification_sender=FakeNotificationSender(),
+        )
+
+    client._transport.app.dependency_overrides[get_sentinel_agent] = override_get_sentinel_agent
+    subscription_id = await _create_subscription(client)
+
+    response = await client.post(
+        f"/api/subscriptions/{subscription_id}/reports",
+        json={"start_date": "2026-05-29", "end_date": "2026-05-30"},
+    )
+
+    assert response.status_code == 201
+    payload = response.json()
+    assert payload["success"] is True
+    assert payload["data"]["subscription_id"] == subscription_id
+    assert payload["data"]["name"] == "acme_sentinel_2026-05-29_2026-05-30"
+    assert payload["data"]["content_markdown"] == "# acme/sentinel\n\nAdd report flow"
+    assert fake_client.calls == [
+        ("github", "acme", "sentinel", datetime(2026, 5, 28, 16, tzinfo=timezone.utc)),
+    ]

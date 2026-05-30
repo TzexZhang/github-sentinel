@@ -1,6 +1,5 @@
-"""
-报告存储模块，负责存储和查询报告。
-"""
+"""报告持久化辅助函数。"""
+
 from datetime import datetime
 
 from sqlalchemy import select
@@ -12,20 +11,32 @@ from app.db.models import Report
 async def create_report(
     session: AsyncSession,
     subscription_id: int,
-    title: str,
-    summary: str,
+    name: str,
+    content_markdown: str,
+    generated_at: datetime,
 ) -> Report:
-    """创建一条仓库报告记录并刷新自增主键。"""
-    report = Report(subscription_id=subscription_id, title=title, summary=summary)
+    """创建 Markdown 报告记录，并刷新自增主键。"""
+    report = Report(
+        subscription_id=subscription_id,
+        name=name,
+        content_markdown=content_markdown,
+        generated_at=generated_at,
+    )
     session.add(report)
     await session.flush()
     await session.refresh(report)
     return report
 
 
-async def list_reports(session: AsyncSession, generated_since: datetime | None = None) -> list[Report]:
-    """按生成时间倒序查询报告列表，可按最早生成时间过滤。"""
+async def list_reports(
+    session: AsyncSession,
+    subscription_id: int | None = None,
+    generated_since: datetime | None = None,
+) -> list[Report]:
+    """按时间倒序查询报告，可按订阅和生成时间过滤。"""
     statement = select(Report)
+    if subscription_id is not None:
+        statement = statement.where(Report.subscription_id == subscription_id)
     if generated_since is not None:
         statement = statement.where(Report.generated_at >= generated_since)
     result = await session.execute(statement.order_by(Report.generated_at.desc(), Report.id.desc()))

@@ -1,20 +1,43 @@
-"""
-报告模型，负责定义报告的请求和响应数据结构。
-定义报告响应模型 `ReportRead`，用于序列化报告列表接口返回值
-"""
-from datetime import datetime
+"""报告请求与响应结构。"""
 
-from pydantic import BaseModel, ConfigDict, Field
+from datetime import date, datetime
+
+from pydantic import BaseModel, ConfigDict, Field, field_serializer, model_validator
+
+from app.services.time_utils import format_report_datetime
 
 
-class ReportRead(BaseModel):
-    """报告列表接口的响应数据结构。"""
+class ReportGenerateRequest(BaseModel):
+    """根据用户选择的日期范围生成报告的请求体。"""
 
-    # from_attributes 允许直接从 SQLAlchemy ORM 对象序列化响应。
+    start_date: date
+    end_date: date
+
+    @model_validator(mode="after")
+    def validate_date_range(self) -> "ReportGenerateRequest":
+        """确保选择的日期范围顺序正确。"""
+        if self.end_date < self.start_date:
+            raise ValueError("end_date 必须大于或等于 start_date")
+        return self
+
+
+class ReportListItem(BaseModel):
+    """浏览订阅报告时使用的精简报告项。"""
+
     model_config = ConfigDict(from_attributes=True)
 
     id: int
     subscription_id: int
-    title: str = Field(min_length=1)
-    summary: str = Field(min_length=1)
+    name: str = Field(min_length=1)
     generated_at: datetime
+
+    @field_serializer("generated_at")
+    def serialize_generated_at(self, value: datetime) -> str:
+        """把报告生成时间统一输出为本地时间字符串。"""
+        return format_report_datetime(value)
+
+
+class ReportRead(ReportListItem):
+    """完整报告响应，包含 Markdown 正文。"""
+
+    content_markdown: str = Field(min_length=1)

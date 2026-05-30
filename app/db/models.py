@@ -70,8 +70,8 @@ class Report(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     subscription_id: Mapped[int] = mapped_column(ForeignKey("subscriptions.id"), nullable=False)
-    title: Mapped[str] = mapped_column(String(300), nullable=False)
-    summary: Mapped[str] = mapped_column(Text, nullable=False)
+    name: Mapped[str] = mapped_column(String(300), nullable=False, index=True)
+    content_markdown: Mapped[str] = mapped_column(Text, nullable=False)
     generated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
 
     subscription: Mapped[Subscription] = relationship()

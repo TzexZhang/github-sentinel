@@ -1,7 +1,7 @@
-"""
-事件存储模块，负责存储和查询仓库事件。
-仓库事件仓储，负责把 GitHub 活动转换为 `RepositoryEvent` 记录，并按 `external_id` 做幂等去重
-"""
+"""仓库事件持久化辅助函数。"""
+
+from datetime import datetime
+
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -15,7 +15,7 @@ async def store_new_repository_events(
     subscription_id: int,
     activities: list[GitHubActivity],
 ) -> list[RepositoryEvent]:
-    """幂等存储新的仓库事件，并返回本次真正新增的记录。"""
+    """仅保存新的仓库事件，并返回本次插入的记录。"""
     unique_activities = _deduplicate_activities(activities)
     if not unique_activities:
         return []
@@ -49,8 +49,27 @@ async def store_new_repository_events(
     return events
 
 
+async def list_repository_events(
+    session: AsyncSession,
+    subscription_id: int,
+    occurred_since: datetime,
+    occurred_before: datetime,
+) -> list[RepositoryEvent]:
+    """查询单个订阅在半开时间区间内的已保存事件。"""
+    result = await session.execute(
+        select(RepositoryEvent)
+        .where(
+            RepositoryEvent.subscription_id == subscription_id,
+            RepositoryEvent.occurred_at >= occurred_since,
+            RepositoryEvent.occurred_at < occurred_before,
+        )
+        .order_by(RepositoryEvent.occurred_at.desc(), RepositoryEvent.id.desc()),
+    )
+    return list(result.scalars().all())
+
+
 def _deduplicate_activities(activities: list[GitHubActivity]) -> list[GitHubActivity]:
-    """按 external_id 对抓取结果去重，保留首次出现的事件。"""
+    """按 external_id 对抓取结果去重，并保留首次出现的记录。"""
     seen: set[str] = set()
     unique: list[GitHubActivity] = []
     for activity in activities:

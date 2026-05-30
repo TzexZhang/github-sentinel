@@ -13,6 +13,39 @@ async def ensure_subscription_columns(connection: AsyncConnection) -> None:
         await _rebuild_subscriptions_table(connection, existing_columns)
 
 
+async def ensure_report_table(connection: AsyncConnection) -> None:
+    """确保 reports 表符合当前 Markdown 报告结构。
+
+    报告历史可以从仓库事件重新生成，因此当旧表结构不兼容时，
+    会按当前约定清空并重建报告表。
+    """
+    result = await connection.execute(text("PRAGMA table_info(reports)"))
+    existing_columns = {row[1] for row in result.fetchall()}
+    if not existing_columns:
+        return
+
+    desired_columns = {"id", "subscription_id", "name", "content_markdown", "generated_at"}
+    if existing_columns == desired_columns:
+        return
+
+    await connection.execute(text("DROP TABLE reports"))
+    await connection.execute(
+        text(
+            """
+            CREATE TABLE reports (
+                id INTEGER NOT NULL PRIMARY KEY,
+                subscription_id INTEGER NOT NULL,
+                name VARCHAR(300) NOT NULL,
+                content_markdown TEXT NOT NULL,
+                generated_at DATETIME,
+                FOREIGN KEY(subscription_id) REFERENCES subscriptions (id)
+            )
+            """,
+        ),
+    )
+    await connection.execute(text("CREATE INDEX ix_reports_name ON reports (name)"))
+
+
 def _requires_subscription_rebuild(existing_columns: set[str]) -> bool:
     """判断现有 subscriptions 表列集合是否需要重建。"""
     desired_columns = {

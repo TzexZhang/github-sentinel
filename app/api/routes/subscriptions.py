@@ -10,8 +10,10 @@ from app.repositories.subscriptions import (
     delete_subscription,
     list_subscriptions,
 )
-from app.schemas.subscriptions import SubscriptionCreate, SubscriptionRead
+from app.repositories.reports import list_reports
+from app.schemas.reports import ReportGenerateRequest, ReportRead
 from app.schemas.responses import ApiResponse, success_response
+from app.schemas.subscriptions import SubscriptionCreate, SubscriptionRead
 
 router = APIRouter(prefix="/subscriptions", tags=["subscriptions"])
 
@@ -60,6 +62,34 @@ async def run_subscription_endpoint(
             "notification_sent": result.notification_sent,
         },
     )
+
+
+@router.post("/{subscription_id}/reports", response_model=ApiResponse, status_code=201)
+async def generate_subscription_report_endpoint(
+    subscription_id: int,
+    payload: ReportGenerateRequest,
+    session: DbSession,
+    sentinel_agent: SentinelAgentDep,
+) -> dict[str, object]:
+    """按用户选择的日期范围抓取仓库事件、去重入库，并生成 Markdown 报告。"""
+    _, report = await sentinel_agent.generate_report_for_date_range(
+        session,
+        subscription_id,
+        payload.start_date,
+        payload.end_date,
+    )
+    return success_response(ReportRead.model_validate(report).model_dump(), code=201)
+
+
+@router.get("/{subscription_id}/reports", response_model=ApiResponse)
+async def list_subscription_reports_endpoint(
+    subscription_id: int,
+    session: DbSession,
+) -> dict[str, object]:
+    """查询指定订阅仓库绑定的报告列表，并返回 Markdown 报告正文。"""
+    reports = await list_reports(session, subscription_id=subscription_id)
+    data = [ReportRead.model_validate(report).model_dump() for report in reports]
+    return success_response(data)
 
 
 """

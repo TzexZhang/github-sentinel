@@ -24,7 +24,7 @@ from app.core.config import settings
 from app.core.errors import ApiError, api_error_handler, validation_error_handler
 # Base: SQLAlchemy ORM 声明性基类，所有数据库模型都继承自它，metadata 记录了全部表结构定义
 from app.db.base import Base
-from app.db.migrations import ensure_subscription_columns
+from app.db.migrations import ensure_report_table, ensure_subscription_columns
 # engine: SQLAlchemy 异步数据库引擎，管理连接池并执行 SQL 语句
 from app.db.session import engine
 
@@ -44,6 +44,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         # 在数据库中创建尚不存在的对应数据表（不会删除或修改已有的表）
         await connection.run_sync(Base.metadata.create_all)
         await ensure_subscription_columns(connection)
+        await ensure_report_table(connection)
     # yield: 上下文管理器的分界线
     # yield 之前的代码在服务启动时执行（建表），yield 暂停，服务开始接收请求
     # yield 之后的代码（本例为空）在服务关闭时执行（可用于清理资源、关闭连接等）
