@@ -57,6 +57,10 @@ class Settings(BaseSettings):
     zhipu_api_key: str | None = Field(default=None, repr=False)
     gemini_api_key: str | None = Field(default=None, repr=False)
     llm_timeout_seconds: float = float(llm_config.get("timeout_seconds", 30.0))
+    log_level: str = "INFO"
+    log_format: str = "json"
+    scheduler_enabled: bool = True
+    scheduler_tick_seconds: int = Field(default=30, ge=1)
 
     @property
     def resolved_llm_api_key(self) -> str | None:

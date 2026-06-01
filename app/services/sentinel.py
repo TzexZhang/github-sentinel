@@ -6,6 +6,7 @@ from datetime import date, datetime, timedelta
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import ApiError
+from app.core.logging import get_logger
 from app.db.models import Report, RepositoryEvent, Subscription
 from app.repositories.events import list_repository_events, store_new_repository_events
 from app.repositories.reports import create_report
@@ -18,6 +19,8 @@ from app.services.time_utils import (
     normalize_event_datetime,
     report_now,
 )
+
+logger = get_logger("sentinel")
 
 
 @dataclass(frozen=True)
@@ -64,6 +67,17 @@ class SentinelAgent:
             occurred_before=occurred_before,
             generated_at=generated_at,
             report_name=report_name,
+        )
+        logger.info(
+            "订阅抓取与报告生成完成",
+            extra={
+                "subscription_id": result.subscription_id,
+                "owner": subscription.owner,
+                "repo": subscription.repo,
+                "fetched_events": result.fetched_events,
+                "stored_events": result.stored_events,
+                "report_id": result.report_id,
+            },
         )
 
         notification_sent = False
@@ -183,9 +197,17 @@ class SentinelAgent:
                 occurred_before,
             )
             try:
-                return await self._llm_client.generate_markdown(prompt)
+                content = await self._llm_client.generate_markdown(prompt)
+                logger.info(
+                    "LLM 报告生成成功",
+                    extra={"subscription_id": subscription.id},
+                )
+                return content
             except LLMError:
-                pass
+                logger.exception(
+                    "LLM 报告生成失败，使用本地 Markdown 模板兜底",
+                    extra={"subscription_id": subscription.id},
+                )
 
         return self._report_renderer.render_digest(
             subscription.owner,

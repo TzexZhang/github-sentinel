@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 from app.api.deps import get_sentinel_agent
 from app.services.github_client import GitHubActivity
 from app.services.sentinel import SentinelAgent
+from app.services.time_utils import report_now
 
 
 class FakeGitHubClient:
@@ -89,7 +90,7 @@ async def test_run_subscription_endpoint_fetches_since_interval_and_generates_re
         {
             "id": payload["data"]["report_id"],
             "subscription_id": subscription_id,
-            "name": "acme_sentinel_2026-05-30",
+            "name": f"acme_sentinel_{report_now().date().isoformat()}",
             "generated_at": reports[0]["generated_at"],
             "content_markdown": "# acme/sentinel\n\n",
         },

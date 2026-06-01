@@ -67,5 +67,7 @@ class SubscriptionRead(BaseModel):
     token_configured: bool
     notification_channel: str | None
     is_active: bool
+    last_run_at: datetime | None
+    next_run_at: datetime | None
     created_at: datetime
     updated_at: datetime

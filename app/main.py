@@ -5,13 +5,15 @@ from collections.abc import AsyncIterator
 # 被 @asynccontextmanager 装饰的函数必须包含恰好一个 yield 语句，
 # yield 之前的部分在进入上下文时执行（即服务启动），yield 之后的部分在退出上下文时执行（即服务关闭）
 from contextlib import asynccontextmanager
+from time import perf_counter
 
 # --- 第三方库导入 ---
 # FastAPI: Web 框架主类，创建应用实例、注册路由、配置中间件等的入口
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 
 # --- 项目内部模块导入 ---
+from app.api.deps import build_sentinel_agent
 # 各业务路由模块，每个 router 是一个 APIRouter 实例，包含一组相关的 HTTP 端点
 from app.api.routes.dashboard import router as dashboard_router
 from app.api.routes.health import router as health_router
@@ -22,11 +24,15 @@ from app.core.config import settings
 # ApiError: 自定义业务异常基类，所有业务层抛出的错误都应继承此类
 # api_error_handler: 全局异常处理函数，将 ApiError 转换为标准化的 HTTP 错误响应
 from app.core.errors import ApiError, api_error_handler, validation_error_handler
+from app.core.logging import configure_logging, get_logger
 # Base: SQLAlchemy ORM 声明性基类，所有数据库模型都继承自它，metadata 记录了全部表结构定义
 from app.db.base import Base
 from app.db.migrations import ensure_report_table, ensure_subscription_columns
 # engine: SQLAlchemy 异步数据库引擎，管理连接池并执行 SQL 语句
-from app.db.session import engine
+from app.db.session import AsyncSessionLocal, engine
+from app.services.scheduler import SubscriptionScheduler
+
+logger = get_logger("main")
 
 
 # @asynccontextmanager 装饰器将下方异步函数变为异步上下文管理器
@@ -36,6 +42,7 @@ from app.db.session import engine
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """在应用启动时初始化数据库表结构并执行轻量迁移。"""
+    configure_logging(settings.log_level, settings.log_format)
     # engine.begin(): 开启一个异步数据库事务
     # async with 确保事务在代码块结束后自动提交或回滚
     async with engine.begin() as connection:
@@ -45,10 +52,24 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         await connection.run_sync(Base.metadata.create_all)
         await ensure_subscription_columns(connection)
         await ensure_report_table(connection)
+    scheduler: SubscriptionScheduler | None = None
+    if settings.scheduler_enabled:
+        scheduler = SubscriptionScheduler(
+            session_factory=AsyncSessionLocal,
+            sentinel_agent=build_sentinel_agent(),
+            tick_seconds=settings.scheduler_tick_seconds,
+        )
+        scheduler.start()
+    else:
+        logger.info("订阅调度器未启用")
     # yield: 上下文管理器的分界线
     # yield 之前的代码在服务启动时执行（建表），yield 暂停，服务开始接收请求
     # yield 之后的代码（本例为空）在服务关闭时执行（可用于清理资源、关闭连接等）
-    yield
+    try:
+        yield
+    finally:
+        if scheduler is not None:
+            await scheduler.stop()
 
 
 # 应用工厂函数：集中创建和配置 FastAPI 实例
@@ -77,6 +98,21 @@ def create_app() -> FastAPI:
     app.include_router(health_router, prefix="/api")
     app.include_router(subscriptions_router, prefix="/api")
     app.include_router(reports_router, prefix="/api")
+
+    @app.middleware("http")
+    async def log_requests(request: Request, call_next):
+        """记录每个 HTTP 请求的处理结果和耗时。"""
+        started_at = perf_counter()
+        response = await call_next(request)
+        duration_ms = int((perf_counter() - started_at) * 1000)
+        logger.info(
+            "HTTP 请求处理完成",
+            extra={
+                "request_id": request.headers.get("x-request-id"),
+                "duration_ms": duration_ms,
+            },
+        )
+        return response
 
     return app
 

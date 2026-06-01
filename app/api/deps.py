@@ -16,7 +16,7 @@ from app.services.sentinel import SentinelAgent
 DbSession = Annotated[AsyncSession, Depends(get_session)]
 
 
-async def get_sentinel_agent() -> SentinelAgent:
+def build_sentinel_agent() -> SentinelAgent:
     """构建 Sentinel 核心编排服务。"""
     return SentinelAgent(
         github_client=HttpRepositoryClient(),
@@ -30,6 +30,11 @@ async def get_sentinel_agent() -> SentinelAgent:
             timeout=settings.llm_timeout_seconds,
         ),
     )
+
+
+async def get_sentinel_agent() -> SentinelAgent:
+    """为 FastAPI 依赖注入构建 Sentinel 核心编排服务。"""
+    return build_sentinel_agent()
 
 
 SentinelAgentDep = Annotated[SentinelAgent, Depends(get_sentinel_agent)]

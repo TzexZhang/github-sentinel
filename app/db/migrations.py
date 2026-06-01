@@ -58,6 +58,8 @@ def _requires_subscription_rebuild(existing_columns: set[str]) -> bool:
         "access_token_encrypted",
         "notification_channel",
         "is_active",
+        "last_run_at",
+        "next_run_at",
         "created_at",
         "updated_at",
     }
@@ -69,7 +71,11 @@ async def _rebuild_subscriptions_table(
     existing_columns: set[str],
 ) -> None:
     """重建 subscriptions 表，并尽量迁移旧表中的可用订阅数据。"""
+    await connection.execute(text("DROP TABLE IF EXISTS subscriptions_legacy"))
     await connection.execute(text("ALTER TABLE subscriptions RENAME TO subscriptions_legacy"))
+    await connection.execute(text("DROP INDEX IF EXISTS ix_subscriptions_platform"))
+    await connection.execute(text("DROP INDEX IF EXISTS ix_subscriptions_owner"))
+    await connection.execute(text("DROP INDEX IF EXISTS ix_subscriptions_repo"))
     await connection.execute(
         text(
             """
@@ -83,6 +89,8 @@ async def _rebuild_subscriptions_table(
                 access_token_encrypted TEXT,
                 notification_channel VARCHAR(200),
                 is_active BOOLEAN NOT NULL DEFAULT 1,
+                last_run_at DATETIME,
+                next_run_at DATETIME,
                 created_at DATETIME,
                 updated_at DATETIME,
                 CONSTRAINT uq_subscription_repo UNIQUE (platform, owner, repo)
@@ -95,6 +103,11 @@ async def _rebuild_subscriptions_table(
     await connection.execute(text("CREATE INDEX ix_subscriptions_repo ON subscriptions (repo)"))
 
     if {"id", "owner", "repo"}.issubset(existing_columns):
+        platform_expression = (
+            "COALESCE(NULLIF(platform, ''), 'github')"
+            if "platform" in existing_columns
+            else "'github'"
+        )
         repository_url_expression = _repository_url_expression(existing_columns)
         interval_expression = "interval_seconds" if "interval_seconds" in existing_columns else "86400"
         token_expression = (
@@ -104,6 +117,8 @@ async def _rebuild_subscriptions_table(
             "notification_channel" if "notification_channel" in existing_columns else "NULL"
         )
         is_active_expression = "is_active" if "is_active" in existing_columns else "1"
+        last_run_at_expression = "last_run_at" if "last_run_at" in existing_columns else "NULL"
+        next_run_at_expression = "next_run_at" if "next_run_at" in existing_columns else "NULL"
         created_at_expression = "created_at" if "created_at" in existing_columns else "CURRENT_TIMESTAMP"
         updated_at_expression = "updated_at" if "updated_at" in existing_columns else "CURRENT_TIMESTAMP"
 
@@ -120,12 +135,14 @@ async def _rebuild_subscriptions_table(
                     access_token_encrypted,
                     notification_channel,
                     is_active,
+                    last_run_at,
+                    next_run_at,
                     created_at,
                     updated_at
                 )
                 SELECT
                     id,
-                    COALESCE(NULLIF(platform, ''), 'github'),
+                    {platform_expression},
                     owner,
                     repo,
                     {repository_url_expression},
@@ -133,6 +150,8 @@ async def _rebuild_subscriptions_table(
                     {token_expression},
                     {notification_expression},
                     {is_active_expression},
+                    {last_run_at_expression},
+                    {next_run_at_expression},
                     {created_at_expression},
                     {updated_at_expression}
                 FROM subscriptions_legacy
@@ -146,17 +165,27 @@ async def _rebuild_subscriptions_table(
 def _repository_url_expression(existing_columns: set[str]) -> str:
     """生成 SQLite 表达式，用于从旧字段推导标准仓库地址。"""
     if "repository_url" in existing_columns:
+        platform_expression = (
+            "COALESCE(NULLIF(platform, ''), 'github')"
+            if "platform" in existing_columns
+            else "'github'"
+        )
         return (
             "CASE WHEN repository_url IS NOT NULL AND repository_url != '' "
             "THEN repository_url "
             "ELSE 'https://' || "
-            "CASE COALESCE(NULLIF(platform, ''), 'github') "
+            f"CASE {platform_expression} "
             "WHEN 'gitee' THEN 'gitee.com' "
             "ELSE 'github.com' END || '/' || owner || '/' || repo END"
         )
+    platform_expression = (
+        "COALESCE(NULLIF(platform, ''), 'github')"
+        if "platform" in existing_columns
+        else "'github'"
+    )
     return (
         "'https://' || "
-        "CASE COALESCE(NULLIF(platform, ''), 'github') "
+        f"CASE {platform_expression} "
         "WHEN 'gitee' THEN 'gitee.com' "
         "ELSE 'github.com' END || '/' || owner || '/' || repo"
     )
