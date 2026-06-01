@@ -141,7 +141,11 @@ gradio-app,
 }
 .report-select-row > *:has(.report-query-button):hover,
 .report-select-row .report-query-button:hover {
-    transform: none !important;
+    background: #2f6b4f !important;
+    border: 1px solid #2f6b4f !important;
+    box-shadow: none !important;
+    color: #ffffff !important;
+    transform: translateY(-10px) !important;
 }
 .report-select-row .report-query-button button,
 .report-select-row button {
@@ -152,6 +156,12 @@ gradio-app,
     line-height: 1;
     margin: 0 !important;
     width: 100% !important;
+}
+.report-select-row .report-query-button button:hover {
+    background: #2f6b4f !important;
+    border-color: #2f6b4f !important;
+    box-shadow: none !important;
+    color: #ffffff !important;
 }
 .report-date-inline {
     display: flex !important;
@@ -344,10 +354,19 @@ def build_gradio_app() -> gr.Blocks:
             gr.Markdown("## 报告中心")
             with gr.Row(elem_classes=["report-center-shell"]):
                 with gr.Column(scale=1, min_width=400, elem_classes=["report-controls"]):
-                    subscription_select = gr.Dropdown(label="选择订阅仓库", choices=[])
+                    subscription_select = gr.Dropdown(
+                        label="选择订阅仓库",
+                        choices=[],
+                        allow_custom_value=True,
+                    )
                     with gr.Group(elem_classes=["report-action-section"]):
                         with gr.Row(elem_classes=["report-select-row"]):
-                            report_select = gr.Dropdown(label="选择报告", choices=[], scale=4)
+                            report_select = gr.Dropdown(
+                                label="选择报告",
+                                choices=[],
+                                scale=4,
+                                allow_custom_value=True,
+                            )
                             query_reports_button = gr.Button(
                                 "查询",
                                 variant="primary",
@@ -528,22 +547,6 @@ async def create_subscription_from_ui(
         )
 
 
-async def run_subscription_from_ui(subscription_id: int | None) -> str:
-    """手动按订阅间隔抓取一次。"""
-    if subscription_id is None:
-        return "请先选择订阅仓库。"
-    try:
-        async with AsyncSessionLocal() as session:
-            result = await build_sentinel_agent().run_subscription(session, int(subscription_id))
-        return (
-            "抓取完成："
-            f"获取 {result.fetched_events} 条，入库 {result.stored_events} 条，"
-            f"报告 ID：{result.report_id or '无'}。"
-        )
-    except ApiError as exc:
-        return _error_message(exc)
-
-
 async def generate_report_from_ui(
     subscription_id: int | None,
     start_date: str | datetime | date | None,
@@ -625,15 +628,16 @@ async def load_reports_for_ui(
 
 
 async def load_report_content_for_ui(
-    report_id: int | None,
-    subscription_id: int | None,
+    report_id: int | str | None,
+    subscription_id: int | str | None,
 ) -> tuple[str, str]:
     """加载选中的 Markdown 报告正文。"""
-    if report_id is None or subscription_id is None:
+    if report_id in (None, "") or subscription_id in (None, ""):
         return "报告生成时间：未选择报告", "请选择左侧报告后查看内容。"
+    selected_report_id = int(report_id)
     reports = await _list_reports(int(subscription_id))
     for report in reports:
-        if report.id == int(report_id):
+        if report.id == selected_report_id:
             return _format_report_generated_at(report), report.content_markdown
     return "报告生成时间：未选择报告", "请选择左侧报告后查看内容。"
 

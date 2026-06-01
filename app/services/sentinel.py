@@ -9,7 +9,7 @@ from app.core.errors import ApiError
 from app.core.logging import get_logger
 from app.db.models import Report, RepositoryEvent, Subscription
 from app.repositories.events import list_repository_events, store_new_repository_events
-from app.repositories.reports import create_report
+from app.repositories.reports import create_report, get_report_by_period
 from app.services.github_client import GitHubActivity, GitHubClient
 from app.services.llm import LLMClient, LLMError
 from app.services.notifications import NotificationSender
@@ -59,6 +59,7 @@ class SentinelAgent:
         generated_at = report_now()
         occurred_before = normalize_event_datetime(generated_at)
         occurred_since = occurred_before - timedelta(seconds=subscription.interval_seconds)
+        report_date = generated_at.date()
         report_name = _build_daily_report_name(subscription.owner, subscription.repo, generated_at)
         result, report = await self._fetch_store_and_create_report(
             session=session,
@@ -67,8 +68,8 @@ class SentinelAgent:
             occurred_before=occurred_before,
             generated_at=generated_at,
             report_name=report_name,
-            period_start_date=None,
-            period_end_date=None,
+            period_start_date=report_date,
+            period_end_date=report_date,
         )
         logger.info(
             "订阅抓取与报告生成完成",
@@ -83,7 +84,7 @@ class SentinelAgent:
         )
 
         notification_sent = False
-        if subscription.notification_channel:
+        if report is not None and subscription.notification_channel:
             await self._notification_sender.send(
                 subscription.notification_channel,
                 report.name,
@@ -116,7 +117,33 @@ class SentinelAgent:
             start_date,
             end_date,
         )
-        return await self._fetch_store_and_create_report(
+        existing_report = await get_report_by_period(session, subscription.id, start_date, end_date)
+        if end_date != generated_at.date():
+            if existing_report is not None:
+                return (
+                    SentinelRunResult(
+                        subscription_id=subscription.id,
+                        fetched_events=0,
+                        stored_events=0,
+                        report_id=existing_report.id,
+                        notification_sent=False,
+                    ),
+                    existing_report,
+                )
+            return await self._create_report_from_stored_events(
+                session=session,
+                subscription=subscription,
+                occurred_since=occurred_since,
+                occurred_before=occurred_before,
+                generated_at=generated_at,
+                report_name=report_name,
+                period_start_date=start_date,
+                period_end_date=end_date,
+                fetched_events=0,
+                stored_events=0,
+            )
+
+        result, report = await self._fetch_store_and_create_report(
             session=session,
             subscription=subscription,
             occurred_since=occurred_since,
@@ -125,6 +152,24 @@ class SentinelAgent:
             report_name=report_name,
             period_start_date=start_date,
             period_end_date=end_date,
+        )
+        if report is not None:
+            return result, report
+        if existing_report is not None:
+            return (
+                SentinelRunResult(
+                    subscription_id=subscription.id,
+                    fetched_events=result.fetched_events,
+                    stored_events=result.stored_events,
+                    report_id=existing_report.id,
+                    notification_sent=False,
+                ),
+                existing_report,
+            )
+        raise ApiError(
+            status_code=409,
+            code="report_no_incremental_events",
+            message="当前日期范围没有增量数据，未生成报告。",
         )
 
     async def _fetch_store_and_create_report(
@@ -135,9 +180,9 @@ class SentinelAgent:
         occurred_before: datetime,
         generated_at: datetime,
         report_name: str,
-        period_start_date: date | None,
-        period_end_date: date | None,
-    ) -> tuple[SentinelRunResult, Report]:
+        period_start_date: date,
+        period_end_date: date,
+    ) -> tuple[SentinelRunResult, Report | None]:
         activities = await self._github_client.fetch_repository_activity(
             platform=subscription.platform,
             owner=subscription.owner,
@@ -155,6 +200,32 @@ class SentinelAgent:
             if occurred_since <= activity.occurred_at < occurred_before
         ]
         stored_events = await store_new_repository_events(session, subscription.id, activities)
+        return await self._create_report_from_stored_events(
+            session=session,
+            subscription=subscription,
+            occurred_since=occurred_since,
+            occurred_before=occurred_before,
+            generated_at=generated_at,
+            report_name=report_name,
+            period_start_date=period_start_date,
+            period_end_date=period_end_date,
+            fetched_events=len(activities),
+            stored_events=len(stored_events),
+        )
+
+    async def _create_report_from_stored_events(
+        self,
+        session: AsyncSession,
+        subscription: Subscription,
+        occurred_since: datetime,
+        occurred_before: datetime,
+        generated_at: datetime,
+        report_name: str,
+        period_start_date: date,
+        period_end_date: date,
+        fetched_events: int,
+        stored_events: int,
+    ) -> tuple[SentinelRunResult, Report]:
         events_for_report = await list_repository_events(
             session,
             subscription.id,
@@ -181,8 +252,8 @@ class SentinelAgent:
         return (
             SentinelRunResult(
                 subscription_id=subscription.id,
-                fetched_events=len(activities),
-                stored_events=len(stored_events),
+                fetched_events=fetched_events,
+                stored_events=stored_events,
                 report_id=report.id,
                 notification_sent=False,
             ),

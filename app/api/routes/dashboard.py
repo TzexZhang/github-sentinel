@@ -198,7 +198,6 @@ DASHBOARD_HTML = """
           <div class="item-actions">
             <button class="btn" type="button" data-select-subscription-id="${item.id}">查看报告</button>
             <button class="btn primary" type="button" data-generate-report-id="${item.id}">生成报告</button>
-            <button class="btn" type="button" data-run-subscription-id="${item.id}">按订阅间隔抓取</button>
             <button class="btn danger" type="button" data-delete-subscription-id="${item.id}">删除订阅</button>
           </div>
         </article>`).join("");
@@ -299,24 +298,6 @@ DASHBOARD_HTML = """
           setText("formStatus", error.message);
         } finally {
           generateButton.disabled = false;
-        }
-        return;
-      }
-
-      const runButton = event.target.closest("[data-run-subscription-id]");
-      if (runButton) {
-        const subscriptionId = runButton.getAttribute("data-run-subscription-id");
-        runButton.disabled = true;
-        setText("formStatus", "正在按订阅间隔抓取仓库事件...");
-        try {
-          await requestJson(`${endpoints.subscriptions}/${subscriptionId}/run`, {method: "POST"});
-          state.selectedSubscriptionId = subscriptionId;
-          setText("formStatus", "订阅间隔报告已生成。");
-          await loadReports();
-        } catch (error) {
-          setText("formStatus", error.message);
-        } finally {
-          runButton.disabled = false;
         }
         return;
       }

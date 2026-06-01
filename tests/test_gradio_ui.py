@@ -10,6 +10,7 @@ from app.ui.gradio_app import (
     format_report_choices,
     format_subscription_choices,
     format_subscription_rows,
+    load_report_content_for_ui,
     load_reports_for_ui,
     parse_ui_date,
 )
@@ -58,7 +59,8 @@ def test_build_gradio_app_contains_core_ui_labels():
     assert "border: 1px solid #2f6b4f" in config_text
     assert "transform: translateY(-10px)" in config_text
     assert ".report-query-button:hover" in config_text
-    assert "transform: none !important" in config_text
+    assert "transform: none !important" not in config_text
+    assert ".report-query-button button:hover" in config_text
     assert "flex-wrap: nowrap !important" in config_text
     assert "flex-shrink: 0 !important" in config_text
     assert ".report-action-section > .styler" in config_text
@@ -112,6 +114,8 @@ def test_build_gradio_app_defaults_report_dates_to_one_week_range():
     start_date, end_date = default_week_date_range()
 
     assert component_by_label["报告列表范围"]["props"]["value"] == "7d"
+    assert component_by_label["选择订阅仓库"]["props"]["allow_custom_value"] is True
+    assert component_by_label["选择报告"]["props"]["allow_custom_value"] is True
     assert component_by_label["开始日期"]["props"]["value"] == start_date.isoformat()
     assert component_by_label["结束日期"]["props"]["value"] == end_date.isoformat()
     assert component_by_label["生成开始日期"]["props"]["value"] == start_date.isoformat()
@@ -212,6 +216,13 @@ async def test_load_reports_for_ui_requires_custom_date_range():
     assert generated_at == "报告生成时间：未选择报告"
     assert preview == "请选择左侧报告后查看内容。"
     assert status == "请选择报告列表范围的开始日期和结束日期。"
+
+
+async def test_load_report_content_for_ui_treats_empty_report_id_as_unselected():
+    generated_at, preview = await load_report_content_for_ui("", 1)
+
+    assert generated_at == "报告生成时间：未选择报告"
+    assert preview == "请选择左侧报告后查看内容。"
 
 
 def test_format_report_choices_uses_report_name_and_generated_time():

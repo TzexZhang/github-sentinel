@@ -9,6 +9,23 @@ from sqlalchemy.orm import selectinload
 from app.db.models import Report
 
 
+async def get_report_by_period(
+    session: AsyncSession,
+    subscription_id: int,
+    period_start_date: date,
+    period_end_date: date,
+) -> Report | None:
+    """查询指定订阅在同一日期范围内的已有报告。"""
+    result = await session.execute(
+        select(Report).where(
+            Report.subscription_id == subscription_id,
+            Report.period_start_date == period_start_date,
+            Report.period_end_date == period_end_date,
+        ),
+    )
+    return result.scalar_one_or_none()
+
+
 async def create_report(
     session: AsyncSession,
     subscription_id: int,
@@ -21,14 +38,12 @@ async def create_report(
     """创建或覆盖 Markdown 报告记录，并刷新自增主键。"""
     report = None
     if period_start_date is not None and period_end_date is not None:
-        result = await session.execute(
-            select(Report).where(
-                Report.subscription_id == subscription_id,
-                Report.period_start_date == period_start_date,
-                Report.period_end_date == period_end_date,
-            ),
+        report = await get_report_by_period(
+            session,
+            subscription_id,
+            period_start_date,
+            period_end_date,
         )
-        report = result.scalar_one_or_none()
 
     if report is None:
         report = Report(

@@ -3,7 +3,6 @@ from datetime import datetime, timezone
 from app.api.deps import get_sentinel_agent
 from app.services.github_client import GitHubActivity
 from app.services.sentinel import SentinelAgent
-from app.services.time_utils import report_now
 
 
 class FakeGitHubClient:
@@ -59,7 +58,7 @@ async def _create_subscription(client) -> int:
     return create_response.json()["data"]["id"]
 
 
-async def test_run_subscription_endpoint_fetches_since_interval_and_generates_report(client):
+async def test_run_subscription_endpoint_is_removed(client):
     fake_client = FakeGitHubClient()
 
     async def override_get_sentinel_agent() -> SentinelAgent:
@@ -74,32 +73,11 @@ async def test_run_subscription_endpoint_fetches_since_interval_and_generates_re
 
     run_response = await client.post(f"/api/subscriptions/{subscription_id}/run")
 
-    assert run_response.status_code == 200
-    payload = run_response.json()
-    assert payload["success"] is True
-    assert payload["data"]["subscription_id"] == subscription_id
-    assert payload["data"]["fetched_events"] == 0
-    assert payload["data"]["stored_events"] == 0
-    assert payload["data"]["report_id"] is not None
-    assert fake_client.calls[0][:3] == ("github", "acme", "sentinel")
-    assert fake_client.calls[0][3] is not None
-
-    reports_response = await client.get(f"/api/subscriptions/{subscription_id}/reports")
-    reports = reports_response.json()["data"]
-    assert reports == [
-        {
-            "id": payload["data"]["report_id"],
-            "subscription_id": subscription_id,
-            "name": f"acme_sentinel_{report_now().date().isoformat()}",
-            "generated_at": reports[0]["generated_at"],
-            "period_start_date": None,
-            "period_end_date": None,
-            "content_markdown": "# acme/sentinel\n\n",
-        },
-    ]
+    assert run_response.status_code == 404
+    assert fake_client.calls == []
 
 
-async def test_generate_report_with_date_range_fetches_updates_then_reads_stored_events(client):
+async def test_generate_historical_report_with_date_range_uses_stored_events_only(client):
     fake_client = FakeGitHubClient()
 
     async def override_get_sentinel_agent() -> SentinelAgent:
@@ -122,7 +100,5 @@ async def test_generate_report_with_date_range_fetches_updates_then_reads_stored
     assert payload["success"] is True
     assert payload["data"]["subscription_id"] == subscription_id
     assert payload["data"]["name"] == "acme_sentinel_2026-05-29_2026-05-30"
-    assert payload["data"]["content_markdown"] == "# acme/sentinel\n\nAdd report flow"
-    assert fake_client.calls == [
-        ("github", "acme", "sentinel", datetime(2026, 5, 28, 16, tzinfo=timezone.utc)),
-    ]
+    assert payload["data"]["content_markdown"] == "# acme/sentinel\n\n"
+    assert fake_client.calls == []
