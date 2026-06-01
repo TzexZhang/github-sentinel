@@ -60,7 +60,7 @@ Update retrieval continuously collects the latest activity from subscribed repos
 Capabilities include:
 
 - Retrieve the latest activity from subscribed repositories.
-- Summarize commits, issues, pull requests, and other project updates.
+- Summarize Push, Issue, Pull Request, and other project updates.
 - Recognize multiple commits in a single push.
 - Extract the message of each commit.
 - Reduce duplicate activity noise in reports.
@@ -87,8 +87,13 @@ Capabilities include:
 
 - Generate project progress reports from repository activity.
 - Present key commit messages in reports.
-- View historical reports.
-- Filter reports by time range, such as the last 1 hour, 24 hours, 7 days, or 30 days.
+- View historical reports bound to a selected subscription.
+- Filter report lists by recent time windows or custom date ranges.
+- Generate a report from a user-selected date range after refreshing repository events for that period.
+- Save report content as Markdown and name reports by repository and date range.
+- Record the start date and end date represented by each report.
+- Update the existing report when the same subscription and date range are generated again, reducing duplicate report buildup.
+- Use the built-in LLM capability to summarize Push, Issue, and Pull Request events. The default provider is the free Zhipu series, with Gemini free-series configuration also available.
 - Support report scenarios such as daily reports, weekly reports, release summaries, and project progress summaries.
 - Support output forms such as Markdown, HTML, and email body content.
 
@@ -120,14 +125,17 @@ Capabilities include:
 
 ### 2.7 Graphical Interface
 
-The graphical interface lowers the usage barrier so non-backend users can complete subscription, retrieval, and report operations.
+The graphical interface is built with Gradio to lower the usage barrier so non-backend users can complete subscription, retrieval, and report operations.
 
 Capabilities include:
 
-- Provide a visual operation entry.
-- Manage subscriptions through forms.
-- Trigger repository update retrieval.
-- View report results.
+- Provide a Gradio-based visual operation entry.
+- Manage and delete subscriptions through forms.
+- Automatically load the report list after a subscription is selected.
+- Query reports by recent time range or custom date range.
+- Separate report-query dates from report-generation dates so users can generate reports for specific periods.
+- View report names, generation times, and Markdown content.
+- Localize the date picker with Chinese month, weekday, and action labels.
 - Reduce reliance on command-line and direct API usage.
 - Fit lightweight project management workflows.
 
@@ -207,10 +215,10 @@ Teams can filter reports by time range and use them for daily reports, weekly re
 | Subscription Management | Add tracked repositories, view subscriptions, remove repositories |
 | Update Retrieval | Retrieve repository activity, organize commit messages, reduce duplicate activity |
 | Notification System | Configure notification targets and share project progress after report generation |
-| Report Generation | Generate Chinese project reports, view historical reports, filter by time range |
+| Report Generation | Generate Chinese project reports, view historical reports, filter by time range, record report periods, update duplicate period reports |
 | Multi-Model Support | Built-in model capability, custom model integration, mainstream model configuration |
 | Scheduled Tasks | Second-level frequency, daily/weekly cycles, long-running tasks |
-| Graphical Interface | Visual operation entry for subscription, retrieval, and report viewing |
+| Graphical Interface | Gradio visual entry with subscription deletion, automatic report-list loading, date-range selection, and report preview |
 | Containerization | Standardized deployment and lower cross-environment runtime cost |
 | Continuous Integration | Automated tests, quality checks, pre-release validation |
 | Security | Optional credentials, encrypted credential storage, no credential exposure in pages or APIs |

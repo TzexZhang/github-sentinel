@@ -202,7 +202,7 @@ def _parse_github_event(item: dict[str, Any], owner: str, repo: str) -> list[Git
     """把单条 GitHub 事件转换为一个或多个统一活动模型。"""
     event_id = str(item.get("id") or f"{item.get('type', 'event')}:{item.get('created_at', '')}")
     event_type = str(item.get("type") or "RepositoryEvent")
-    if event_type not in {"PushEvent", "IssuesEvent"}:
+    if event_type not in {"PushEvent", "IssuesEvent", "PullRequestEvent"}:
         return []
     payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
     occurred_at = _parse_datetime(str(item.get("created_at") or ""))
@@ -284,7 +284,7 @@ def _parse_gitee_event(item: dict[str, Any], owner: str, repo: str) -> list[GitH
     """把单条 Gitee 事件转换为一个或多个统一活动模型。"""
     event_id = str(item.get("id") or f"{item.get('type', 'event')}:{item.get('created_at', '')}")
     event_type = str(item.get("type") or "RepositoryEvent")
-    if event_type not in {"PushEvent", "IssueEvent", "IssuesEvent"}:
+    if event_type not in {"PushEvent", "IssueEvent", "IssuesEvent", "PullRequestEvent"}:
         return []
     occurred_at = _parse_datetime(str(item.get("created_at") or ""))
     if event_type == "PushEvent":

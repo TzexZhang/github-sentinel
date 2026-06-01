@@ -92,6 +92,8 @@ async def test_run_subscription_endpoint_fetches_since_interval_and_generates_re
             "subscription_id": subscription_id,
             "name": f"acme_sentinel_{report_now().date().isoformat()}",
             "generated_at": reports[0]["generated_at"],
+            "period_start_date": None,
+            "period_end_date": None,
             "content_markdown": "# acme/sentinel\n\n",
         },
     ]

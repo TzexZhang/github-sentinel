@@ -30,6 +30,8 @@ class ReportListItem(BaseModel):
     subscription_id: int
     name: str = Field(min_length=1)
     generated_at: datetime
+    period_start_date: date | None = None
+    period_end_date: date | None = None
 
     @field_serializer("generated_at")
     def serialize_generated_at(self, value: datetime) -> str:

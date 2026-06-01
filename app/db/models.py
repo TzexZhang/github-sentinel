@@ -2,9 +2,9 @@
 数据库模型模块，负责定义数据库表结构。
 定义数据库 ORM 模型：`Subscription`、`RepositoryEvent`、`Report`、`NotificationChannel`。这些模型对应订阅、仓库事件、报告和通知通道
 """
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
@@ -75,6 +75,8 @@ class Report(Base):
     name: Mapped[str] = mapped_column(String(300), nullable=False, index=True)
     content_markdown: Mapped[str] = mapped_column(Text, nullable=False)
     generated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    period_start_date: Mapped[date | None] = mapped_column(Date, nullable=True, index=True)
+    period_end_date: Mapped[date | None] = mapped_column(Date, nullable=True, index=True)
 
     subscription: Mapped[Subscription] = relationship()
 

@@ -67,6 +67,8 @@ class SentinelAgent:
             occurred_before=occurred_before,
             generated_at=generated_at,
             report_name=report_name,
+            period_start_date=None,
+            period_end_date=None,
         )
         logger.info(
             "订阅抓取与报告生成完成",
@@ -121,6 +123,8 @@ class SentinelAgent:
             occurred_before=occurred_before,
             generated_at=generated_at,
             report_name=report_name,
+            period_start_date=start_date,
+            period_end_date=end_date,
         )
 
     async def _fetch_store_and_create_report(
@@ -131,6 +135,8 @@ class SentinelAgent:
         occurred_before: datetime,
         generated_at: datetime,
         report_name: str,
+        period_start_date: date | None,
+        period_end_date: date | None,
     ) -> tuple[SentinelRunResult, Report]:
         activities = await self._github_client.fetch_repository_activity(
             platform=subscription.platform,
@@ -168,6 +174,8 @@ class SentinelAgent:
             report_name,
             content_markdown,
             generated_at,
+            period_start_date=period_start_date,
+            period_end_date=period_end_date,
         )
         await session.commit()
         return (

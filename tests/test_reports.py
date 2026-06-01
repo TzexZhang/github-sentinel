@@ -1,5 +1,6 @@
 from collections.abc import AsyncIterator
 from datetime import datetime, timezone
+from datetime import date
 
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
@@ -41,6 +42,8 @@ async def test_list_subscription_reports_returns_selected_repository_markdown_re
                     name="acme_sentinel_2026-05-30",
                     content_markdown="# sentinel",
                     generated_at=datetime(2026, 5, 30, tzinfo=timezone.utc),
+                    period_start_date=date(2026, 5, 29),
+                    period_end_date=date(2026, 5, 30),
                 ),
                 Report(
                     subscription_id=second.id,
@@ -73,6 +76,8 @@ async def test_list_subscription_reports_returns_selected_repository_markdown_re
             "subscription_id": first_id,
             "name": "acme_sentinel_2026-05-30",
             "generated_at": "2026-05-30 00:00:00",
+            "period_start_date": "2026-05-29",
+            "period_end_date": "2026-05-30",
             "content_markdown": "# sentinel",
         },
     ]

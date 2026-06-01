@@ -9,13 +9,13 @@ from time import perf_counter
 
 # --- 第三方库导入 ---
 # FastAPI: Web 框架主类，创建应用实例、注册路由、配置中间件等的入口
+import gradio as gr
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 
 # --- 项目内部模块导入 ---
 from app.api.deps import build_sentinel_agent
 # 各业务路由模块，每个 router 是一个 APIRouter 实例，包含一组相关的 HTTP 端点
-from app.api.routes.dashboard import router as dashboard_router
 from app.api.routes.health import router as health_router
 from app.api.routes.reports import router as reports_router
 from app.api.routes.subscriptions import router as subscriptions_router
@@ -31,6 +31,7 @@ from app.db.migrations import ensure_report_table, ensure_subscription_columns
 # engine: SQLAlchemy 异步数据库引擎，管理连接池并执行 SQL 语句
 from app.db.session import AsyncSessionLocal, engine
 from app.services.scheduler import SubscriptionScheduler
+from app.ui.gradio_app import build_gradio_app
 
 logger = get_logger("main")
 
@@ -90,9 +91,6 @@ def create_app() -> FastAPI:
     app.add_exception_handler(ApiError, api_error_handler)
     app.add_exception_handler(RequestValidationError, validation_error_handler)
 
-    # include_router: 将子路由模块挂载到主应用上
-    # dashboard_router: 仪表盘相关接口，无 prefix 前缀
-    app.include_router(dashboard_router)
     # 其余路由均挂载到 /api 前缀下
     # 例如 subscriptions_router 中的 /subscriptions 端点，最终路径为 /api/subscriptions
     app.include_router(health_router, prefix="/api")
@@ -114,7 +112,7 @@ def create_app() -> FastAPI:
         )
         return response
 
-    return app
+    return gr.mount_gradio_app(app, build_gradio_app(), path="/")
 
 
 # 模块级变量：创建全局应用实例

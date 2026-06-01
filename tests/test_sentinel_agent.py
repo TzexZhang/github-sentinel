@@ -222,3 +222,51 @@ async def test_sentinel_agent_fetches_then_generates_date_range_report_from_stor
     assert "Remote event should be saved" in llm_client.prompts[0]
 
     await engine.dispose()
+
+
+async def test_sentinel_agent_overwrites_existing_report_for_same_date_range():
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:", future=True)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+
+    llm_client = FakeLLMClient()
+
+    async with session_factory() as session:
+        subscription = Subscription(
+            platform="github",
+            owner="acme",
+            repo="sentinel",
+            repository_url="https://github.com/acme/sentinel",
+            interval_seconds=86_400,
+        )
+        session.add(subscription)
+        await session.commit()
+        await session.refresh(subscription)
+
+        agent = SentinelAgent(
+            github_client=FakeGitHubClient([]),
+            report_renderer=FakeReportRenderer(),
+            notification_sender=RecordingNotificationSender(),
+            llm_client=llm_client,
+        )
+
+        _, first = await agent.generate_report_for_date_range(
+            session,
+            subscription.id,
+            datetime(2026, 5, 29, tzinfo=timezone.utc).date(),
+            datetime(2026, 5, 30, tzinfo=timezone.utc).date(),
+        )
+        _, second = await agent.generate_report_for_date_range(
+            session,
+            subscription.id,
+            datetime(2026, 5, 29, tzinfo=timezone.utc).date(),
+            datetime(2026, 5, 30, tzinfo=timezone.utc).date(),
+        )
+
+    assert second.id == first.id
+    assert second.period_start_date.isoformat() == "2026-05-29"
+    assert second.period_end_date.isoformat() == "2026-05-30"
+
+    await engine.dispose()

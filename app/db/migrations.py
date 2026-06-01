@@ -24,7 +24,15 @@ async def ensure_report_table(connection: AsyncConnection) -> None:
     if not existing_columns:
         return
 
-    desired_columns = {"id", "subscription_id", "name", "content_markdown", "generated_at"}
+    desired_columns = {
+        "id",
+        "subscription_id",
+        "name",
+        "content_markdown",
+        "generated_at",
+        "period_start_date",
+        "period_end_date",
+    }
     if existing_columns == desired_columns:
         return
 
@@ -38,12 +46,16 @@ async def ensure_report_table(connection: AsyncConnection) -> None:
                 name VARCHAR(300) NOT NULL,
                 content_markdown TEXT NOT NULL,
                 generated_at DATETIME,
+                period_start_date DATE,
+                period_end_date DATE,
                 FOREIGN KEY(subscription_id) REFERENCES subscriptions (id)
             )
             """,
         ),
     )
     await connection.execute(text("CREATE INDEX ix_reports_name ON reports (name)"))
+    await connection.execute(text("CREATE INDEX ix_reports_period_start_date ON reports (period_start_date)"))
+    await connection.execute(text("CREATE INDEX ix_reports_period_end_date ON reports (period_end_date)"))
 
 
 def _requires_subscription_rebuild(existing_columns: set[str]) -> bool:

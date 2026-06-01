@@ -30,6 +30,17 @@ async def test_http_repository_client_keeps_only_push_and_issues_events():
                     },
                 },
                 {
+                    "id": "pr-1",
+                    "type": "PullRequestEvent",
+                    "created_at": "2026-05-30T09:30:00Z",
+                    "payload": {
+                        "pull_request": {
+                            "title": "Add report overwrite flow",
+                            "html_url": "https://github.com/acme/sentinel/pull/2",
+                        },
+                    },
+                },
+                {
                     "id": "star-1",
                     "type": "WatchEvent",
                     "created_at": "2026-05-30T10:00:00Z",
@@ -49,8 +60,13 @@ async def test_http_repository_client_keeps_only_push_and_issues_events():
             since=None,
         )
 
-    assert [activity.event_type for activity in activities] == ["PushEvent", "IssuesEvent"]
+    assert [activity.event_type for activity in activities] == [
+        "PushEvent",
+        "IssuesEvent",
+        "PullRequestEvent",
+    ]
     assert [activity.title for activity in activities] == [
         "Add LLM summary",
         "Summarize issue updates",
+        "Add report overwrite flow",
     ]
