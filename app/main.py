@@ -19,6 +19,7 @@ from app.api.deps import build_notification_router, build_sentinel_agent
 from app.api.routes.health import router as health_router
 from app.api.routes.reports import router as reports_router
 from app.api.routes.subscriptions import router as subscriptions_router
+from app.api.routes.wecom import router as wecom_router
 # settings: 全局配置单例，从环境变量或 .env 文件加载应用配置
 from app.core.config import settings
 # ApiError: 自定义业务异常基类，所有业务层抛出的错误都应继承此类
@@ -114,6 +115,7 @@ def create_app() -> FastAPI:
     app.include_router(health_router, prefix="/api")
     app.include_router(subscriptions_router, prefix="/api")
     app.include_router(reports_router, prefix="/api")
+    app.include_router(wecom_router)
 
     @app.middleware("http")
     async def log_requests(request: Request, call_next):
