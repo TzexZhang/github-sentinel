@@ -1,0 +1,13 @@
+.git
+.codegraph
+.pytest_cache
+.ruff_cache
+.venv
+__pycache__
+*.pyc
+*.db
+*.sqlite
+*.sqlite3
+.env
+data
+PROJECT_STRUCTURE.md

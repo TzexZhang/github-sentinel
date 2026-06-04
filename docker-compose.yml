@@ -1,0 +1,24 @@
+services:
+  github-sentinel:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: github-sentinel
+    restart: unless-stopped
+    env_file:
+      - .env
+    expose:
+      - "7680"
+    volumes:
+      - ./data:/app/data
+
+  nginx:
+    image: nginx:1.27-alpine
+    container_name: github-sentinel-nginx
+    restart: unless-stopped
+    depends_on:
+      - github-sentinel
+    ports:
+      - "7680:7680"
+    volumes:
+      - ./deploy/nginx/github-sentinel.conf:/etc/nginx/conf.d/default.conf:ro
