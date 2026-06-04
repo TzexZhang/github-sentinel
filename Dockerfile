@@ -6,7 +6,7 @@ ENV PYTHONUNBUFFERED=1
 ENV UV_INDEX_URL=https://mirrors.aliyun.com/pypi/simple
 
 COPY pyproject.toml uv.lock ./
-RUN uv sync --frozen --no-dev
+RUN uv sync --no-dev
 
 COPY . .
 
