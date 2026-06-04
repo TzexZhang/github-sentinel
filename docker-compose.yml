@@ -13,7 +13,7 @@ services:
       - ./data:/app/data
 
   nginx:
-    image: nginx:1.27-alpine
+    image: nginx:alpine
     container_name: github-sentinel-nginx
     restart: unless-stopped
     depends_on:
