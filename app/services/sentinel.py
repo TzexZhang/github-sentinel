@@ -9,6 +9,7 @@ from app.core.errors import ApiError
 from app.core.logging import get_logger
 from app.db.models import Report, RepositoryEvent, Subscription
 from app.repositories.events import list_repository_events, store_new_repository_events
+from app.repositories.notifications import create_notification_jobs_for_report
 from app.repositories.reports import create_report, get_report_by_period
 from app.services.github_client import GitHubActivity, GitHubClient
 from app.services.llm import LLMClient, LLMError
@@ -83,21 +84,16 @@ class SentinelAgent:
             },
         )
 
-        notification_sent = False
-        if report is not None and subscription.notification_channel:
-            await self._notification_sender.send(
-                subscription.notification_channel,
-                report.name,
-                report.content_markdown,
-            )
-            notification_sent = True
+        if report is not None:
+            await create_notification_jobs_for_report(session, subscription, report)
+            await session.commit()
 
         return SentinelRunResult(
             subscription_id=result.subscription_id,
             fetched_events=result.fetched_events,
             stored_events=result.stored_events,
             report_id=result.report_id,
-            notification_sent=notification_sent,
+            notification_sent=False,
         )
 
     async def generate_report_for_date_range(
@@ -106,6 +102,7 @@ class SentinelAgent:
         subscription_id: int,
         start_date: date,
         end_date: date,
+        send_notification: bool = False,
     ) -> tuple[SentinelRunResult, Report]:
         """按用户选择的日期范围抓取最新事件、更新事件表，并生成 Markdown 报告。"""
         subscription = await self._get_active_subscription(session, subscription_id)
@@ -120,7 +117,9 @@ class SentinelAgent:
         existing_report = await get_report_by_period(session, subscription.id, start_date, end_date)
         if end_date != generated_at.date():
             if existing_report is not None:
-                return (
+                return await self._with_manual_notification_choice(
+                    session,
+                    subscription,
                     SentinelRunResult(
                         subscription_id=subscription.id,
                         fetched_events=0,
@@ -129,8 +128,9 @@ class SentinelAgent:
                         notification_sent=False,
                     ),
                     existing_report,
+                    send_notification,
                 )
-            return await self._create_report_from_stored_events(
+            result, report = await self._create_report_from_stored_events(
                 session=session,
                 subscription=subscription,
                 occurred_since=occurred_since,
@@ -141,6 +141,13 @@ class SentinelAgent:
                 period_end_date=end_date,
                 fetched_events=0,
                 stored_events=0,
+            )
+            return await self._with_manual_notification_choice(
+                session,
+                subscription,
+                result,
+                report,
+                send_notification,
             )
 
         result, report = await self._fetch_store_and_create_report(
@@ -154,9 +161,17 @@ class SentinelAgent:
             period_end_date=end_date,
         )
         if report is not None:
-            return result, report
+            return await self._with_manual_notification_choice(
+                session,
+                subscription,
+                result,
+                report,
+                send_notification,
+            )
         if existing_report is not None:
-            return (
+            return await self._with_manual_notification_choice(
+                session,
+                subscription,
                 SentinelRunResult(
                     subscription_id=subscription.id,
                     fetched_events=result.fetched_events,
@@ -165,6 +180,7 @@ class SentinelAgent:
                     notification_sent=False,
                 ),
                 existing_report,
+                send_notification,
             )
         raise ApiError(
             status_code=409,
@@ -260,6 +276,31 @@ class SentinelAgent:
             report,
         )
 
+    async def _with_manual_notification_choice(
+        self,
+        session: AsyncSession,
+        subscription: Subscription,
+        result: SentinelRunResult,
+        report: Report,
+        send_notification: bool,
+    ) -> tuple[SentinelRunResult, Report]:
+        """根据手动生成入参决定是否为报告创建通知任务。"""
+        if not send_notification:
+            return result, report
+
+        jobs = await create_notification_jobs_for_report(session, subscription, report)
+        await session.commit()
+        return (
+            SentinelRunResult(
+                subscription_id=result.subscription_id,
+                fetched_events=result.fetched_events,
+                stored_events=result.stored_events,
+                report_id=result.report_id,
+                notification_sent=bool(jobs),
+            ),
+            report,
+        )
+
     async def _render_report_markdown(
         self,
         subscription: Subscription,
@@ -282,10 +323,10 @@ class SentinelAgent:
                     extra={"subscription_id": subscription.id},
                 )
                 return content
-            except LLMError:
-                logger.exception(
+            except LLMError as exc:
+                logger.warning(
                     "LLM 报告生成失败，使用本地 Markdown 模板兜底",
-                    extra={"subscription_id": subscription.id},
+                    extra={"subscription_id": subscription.id, "error_message": str(exc)},
                 )
 
         return self._report_renderer.render_digest(

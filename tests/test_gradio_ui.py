@@ -4,7 +4,11 @@ import pytest
 
 from app.db.models import Report, Subscription
 from app.ui.gradio_app import (
+    _empty_subscription_form_updates,
+    _notification_channels_from_ui,
     _selected_delete_subscription_id,
+    _selected_edit_subscription_id,
+    _subscription_edit_form_updates,
     build_gradio_app,
     default_week_date_range,
     format_report_choices,
@@ -90,6 +94,10 @@ def test_build_gradio_app_contains_core_ui_labels():
     assert "生成结束日期" in labels
     assert "简报预览" in labels
     assert "选择报告" in labels
+    assert "通知类型" in labels
+    assert "通知目标（可选）" in labels
+    assert "通知通道名称（可选）" not in labels
+    assert "生成后发送通知" in labels
     assert "查询" in str(config)
     assert "请选择开始日期" in str(config)
     assert "请选择结束日期" in str(config)
@@ -120,6 +128,7 @@ def test_build_gradio_app_defaults_report_dates_to_one_week_range():
     assert component_by_label["结束日期"]["props"]["value"] == end_date.isoformat()
     assert component_by_label["生成开始日期"]["props"]["value"] == start_date.isoformat()
     assert component_by_label["生成结束日期"]["props"]["value"] == end_date.isoformat()
+    assert component_by_label["生成后发送通知"]["props"]["value"] is False
 
 
 def test_build_gradio_app_places_report_filters_under_report_selector():
@@ -170,8 +179,38 @@ def test_format_subscription_choices_uses_repository_identity():
     ]
 
     assert format_subscription_choices(subscriptions) == [
-        ("#1 github acme/sentinel", 1),
+        ("acme/sentinel", 1),
     ]
+
+
+def test_notification_channels_from_ui_uses_selected_channel_type_and_target():
+    assert _notification_channels_from_ui("smtp", "team@example.com") == [
+        {
+            "name": "smtp-team@example.com",
+            "channel_type": "smtp",
+            "target": "team@example.com",
+        },
+    ]
+
+
+def test_notification_channels_from_ui_generates_name_when_omitted():
+    assert _notification_channels_from_ui("smtp", "team@example.com") == [
+        {
+            "name": "smtp-team@example.com",
+            "channel_type": "smtp",
+            "target": "team@example.com",
+        },
+    ]
+
+
+def test_notification_channels_from_ui_requires_complete_channel_fields():
+    with pytest.raises(ValueError, match="通知类型和通知目标需要同时填写"):
+        _notification_channels_from_ui("smtp", None)
+
+
+def test_notification_channels_from_ui_rejects_smtp_target_that_is_not_email():
+    with pytest.raises(ValueError, match="SMTP 通知目标必须是邮箱地址"):
+        _notification_channels_from_ui("smtp", "not-an-email")
 
 
 def test_format_subscription_rows_adds_delete_action_column():
@@ -187,26 +226,95 @@ def test_format_subscription_rows_adds_delete_action_column():
         ),
     ]
 
-    assert format_subscription_rows(subscriptions)[0][-1] == "删除"
+    row = format_subscription_rows(subscriptions)[0]
+
+    assert len(row) == 9
+    assert row[-1] == "修改 / 删除"
 
 
 def test_selected_delete_subscription_id_accepts_gradio_dataframe_value():
     pd = pytest.importorskip("pandas")
 
     rows = pd.DataFrame(
-        [[12, "github", "acme/sentinel", 60, "已配置", "", "", "启用", "删除"]],
-        columns=["ID", "平台", "仓库", "间隔秒数", "Token", "上次运行", "下次运行", "状态", "操作"],
+        [[12, "github", "acme/sentinel", 60, "已配置", "", "", "启用", "修改 / 删除"]],
+        columns=[
+            "ID",
+            "平台",
+            "仓库",
+            "间隔秒数",
+            "Token",
+            "上次运行",
+            "下次运行",
+            "状态",
+            "操作",
+        ],
     )
     event = type("SelectEvent", (), {"index": (0, 8)})()
 
-    assert _selected_delete_subscription_id(rows, event) == 12
+    assert _selected_delete_subscription_id(rows, event) is None
+
+
+def test_selected_edit_subscription_id_accepts_modify_action_column():
+    rows = [[12, "github", "acme/sentinel", 60, "已配置", "", "", "启用", "修改 / 删除"]]
+    event = type("SelectEvent", (), {"index": (0, 8)})()
+
+    assert _selected_edit_subscription_id(rows, event) == 12
 
 
 def test_selected_delete_subscription_id_ignores_non_action_column():
-    rows = [[12, "github", "acme/sentinel", 60, "已配置", "", "", "启用", "删除"]]
+    rows = [[12, "github", "acme/sentinel", 60, "已配置", "", "", "启用", "修改 / 删除"]]
     event = type("SelectEvent", (), {"index": (0, 2)})()
 
     assert _selected_delete_subscription_id(rows, event) is None
+
+
+def test_empty_subscription_form_updates_reset_create_mode():
+    updates = _empty_subscription_form_updates()
+
+    assert updates["repository_url"]["value"] == ""
+    assert updates["repository_url"]["interactive"] is True
+    assert updates["access_token"]["value"] == ""
+    assert updates["access_token"]["interactive"] is True
+    assert updates["interval_seconds"]["value"] == 86400
+    assert updates["notification_channel_type"]["value"] == "smtp"
+    assert updates["notification_channel_target"]["value"] == ""
+    assert updates["editing_subscription_id"] is None
+    assert updates["create_button"]["visible"] is True
+    assert updates["update_button"]["visible"] is False
+    assert updates["delete_button"]["visible"] is False
+
+
+def test_subscription_edit_form_updates_backfill_readonly_repository_fields():
+    subscription = Subscription(
+        id=12,
+        platform="github",
+        owner="acme",
+        repo="sentinel",
+        repository_url="https://github.com/acme/sentinel",
+        interval_seconds=60,
+        access_token_encrypted="encrypted-token",
+        notification_channels=[
+            {
+                "name": "smtp-team@example.com",
+                "channel_type": "smtp",
+                "target": "team@example.com",
+            },
+        ],
+    )
+
+    updates = _subscription_edit_form_updates(subscription)
+
+    assert updates["repository_url"]["value"] == "https://github.com/acme/sentinel"
+    assert updates["repository_url"]["interactive"] is False
+    assert updates["access_token"]["value"] == "已配置"
+    assert updates["access_token"]["interactive"] is False
+    assert updates["interval_seconds"]["value"] == 60
+    assert updates["notification_channel_type"]["value"] == "smtp"
+    assert updates["notification_channel_target"]["value"] == "team@example.com"
+    assert updates["editing_subscription_id"] == 12
+    assert updates["create_button"]["visible"] is False
+    assert updates["update_button"]["visible"] is True
+    assert updates["delete_button"]["visible"] is True
 
 
 async def test_load_reports_for_ui_requires_custom_date_range():

@@ -58,6 +58,71 @@ async def ensure_report_table(connection: AsyncConnection) -> None:
     await connection.execute(text("CREATE INDEX ix_reports_period_end_date ON reports (period_end_date)"))
 
 
+async def ensure_notification_channel_table(connection: AsyncConnection) -> None:
+    """确保通知通道名称不再是全局唯一，通道归属由订阅绑定表表达。"""
+    result = await connection.execute(text("PRAGMA table_info(notification_channels)"))
+    existing_columns = {row[1] for row in result.fetchall()}
+    if not existing_columns:
+        return
+
+    index_result = await connection.execute(text("PRAGMA index_list(notification_channels)"))
+    has_unique_name_index = False
+    for row in index_result.fetchall():
+        index_name = row[1]
+        is_unique = bool(row[2])
+        if not is_unique:
+            continue
+        info_result = await connection.execute(text(f"PRAGMA index_info('{index_name}')"))
+        indexed_columns = [info_row[2] for info_row in info_result.fetchall()]
+        if indexed_columns == ["name"]:
+            has_unique_name_index = True
+            break
+
+    if not has_unique_name_index:
+        return
+
+    await connection.execute(text("PRAGMA foreign_keys=OFF"))
+    await connection.execute(text("ALTER TABLE notification_channels RENAME TO notification_channels_legacy"))
+    await connection.execute(
+        text(
+            """
+            CREATE TABLE notification_channels (
+                id INTEGER NOT NULL PRIMARY KEY,
+                name VARCHAR(100) NOT NULL,
+                channel_type VARCHAR(30) NOT NULL,
+                target VARCHAR(500) NOT NULL,
+                is_active BOOLEAN NOT NULL,
+                created_at DATETIME
+            )
+            """,
+        ),
+    )
+    await connection.execute(
+        text(
+            """
+            INSERT INTO notification_channels (
+                id,
+                name,
+                channel_type,
+                target,
+                is_active,
+                created_at
+            )
+            SELECT
+                id,
+                name,
+                channel_type,
+                target,
+                is_active,
+                created_at
+            FROM notification_channels_legacy
+            """,
+        ),
+    )
+    await connection.execute(text("DROP TABLE notification_channels_legacy"))
+    await connection.execute(text("PRAGMA foreign_keys=ON"))
+
+
 def _requires_subscription_rebuild(existing_columns: set[str]) -> bool:
     """判断现有 subscriptions 表列集合是否需要重建。"""
     desired_columns = {
@@ -68,7 +133,6 @@ def _requires_subscription_rebuild(existing_columns: set[str]) -> bool:
         "repository_url",
         "interval_seconds",
         "access_token_encrypted",
-        "notification_channel",
         "is_active",
         "last_run_at",
         "next_run_at",
@@ -99,7 +163,6 @@ async def _rebuild_subscriptions_table(
                 repository_url VARCHAR(500) NOT NULL,
                 interval_seconds INTEGER NOT NULL DEFAULT 86400,
                 access_token_encrypted TEXT,
-                notification_channel VARCHAR(200),
                 is_active BOOLEAN NOT NULL DEFAULT 1,
                 last_run_at DATETIME,
                 next_run_at DATETIME,
@@ -125,9 +188,6 @@ async def _rebuild_subscriptions_table(
         token_expression = (
             "access_token_encrypted" if "access_token_encrypted" in existing_columns else "NULL"
         )
-        notification_expression = (
-            "notification_channel" if "notification_channel" in existing_columns else "NULL"
-        )
         is_active_expression = "is_active" if "is_active" in existing_columns else "1"
         last_run_at_expression = "last_run_at" if "last_run_at" in existing_columns else "NULL"
         next_run_at_expression = "next_run_at" if "next_run_at" in existing_columns else "NULL"
@@ -145,7 +205,6 @@ async def _rebuild_subscriptions_table(
                     repository_url,
                     interval_seconds,
                     access_token_encrypted,
-                    notification_channel,
                     is_active,
                     last_run_at,
                     next_run_at,
@@ -160,7 +219,6 @@ async def _rebuild_subscriptions_table(
                     {repository_url_expression},
                     {interval_expression},
                     {token_expression},
-                    {notification_expression},
                     {is_active_expression},
                     {last_run_at_expression},
                     {next_run_at_expression},

@@ -14,7 +14,7 @@ from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 
 # --- 项目内部模块导入 ---
-from app.api.deps import build_sentinel_agent
+from app.api.deps import build_notification_router, build_sentinel_agent
 # 各业务路由模块，每个 router 是一个 APIRouter 实例，包含一组相关的 HTTP 端点
 from app.api.routes.health import router as health_router
 from app.api.routes.reports import router as reports_router
@@ -27,9 +27,14 @@ from app.core.errors import ApiError, api_error_handler, validation_error_handle
 from app.core.logging import configure_logging, get_logger
 # Base: SQLAlchemy ORM 声明性基类，所有数据库模型都继承自它，metadata 记录了全部表结构定义
 from app.db.base import Base
-from app.db.migrations import ensure_report_table, ensure_subscription_columns
+from app.db.migrations import (
+    ensure_notification_channel_table,
+    ensure_report_table,
+    ensure_subscription_columns,
+)
 # engine: SQLAlchemy 异步数据库引擎，管理连接池并执行 SQL 语句
 from app.db.session import AsyncSessionLocal, engine
+from app.services.notification_worker import NotificationWorker
 from app.services.scheduler import SubscriptionScheduler
 from app.ui.gradio_app import build_gradio_app
 
@@ -53,7 +58,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         await connection.run_sync(Base.metadata.create_all)
         await ensure_subscription_columns(connection)
         await ensure_report_table(connection)
+        await ensure_notification_channel_table(connection)
     scheduler: SubscriptionScheduler | None = None
+    notification_worker: NotificationWorker | None = None
     if settings.scheduler_enabled:
         scheduler = SubscriptionScheduler(
             session_factory=AsyncSessionLocal,
@@ -63,6 +70,15 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         scheduler.start()
     else:
         logger.info("订阅调度器未启用")
+    if settings.notification_worker_enabled:
+        notification_worker = NotificationWorker(
+            session_factory=AsyncSessionLocal,
+            notification_sender=build_notification_router(),
+            tick_seconds=settings.notification_worker_tick_seconds,
+        )
+        notification_worker.start()
+    else:
+        logger.info("通知 Worker 未启用")
     # yield: 上下文管理器的分界线
     # yield 之前的代码在服务启动时执行（建表），yield 暂停，服务开始接收请求
     # yield 之后的代码（本例为空）在服务关闭时执行（可用于清理资源、关闭连接等）
@@ -71,6 +87,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     finally:
         if scheduler is not None:
             await scheduler.stop()
+        if notification_worker is not None:
+            await notification_worker.stop()
 
 
 # 应用工厂函数：集中创建和配置 FastAPI 实例
@@ -112,7 +130,7 @@ def create_app() -> FastAPI:
         )
         return response
 
-    return gr.mount_gradio_app(app, build_gradio_app(), path="/")
+    return gr.mount_gradio_app(app, build_gradio_app(), path="/dashboard")
 
 
 # 模块级变量：创建全局应用实例

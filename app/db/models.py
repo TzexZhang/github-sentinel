@@ -1,6 +1,6 @@
 """
 数据库模型模块，负责定义数据库表结构。
-定义数据库 ORM 模型：`Subscription`、`RepositoryEvent`、`Report`、`NotificationChannel`。这些模型对应订阅、仓库事件、报告和通知通道
+定义数据库 ORM 模型：订阅、仓库事件、报告、通知通道、订阅通道绑定和通知任务。
 """
 from datetime import date, datetime, timezone
 
@@ -30,7 +30,6 @@ class Subscription(Base):
     repository_url: Mapped[str] = mapped_column(String(500), nullable=False)
     interval_seconds: Mapped[int] = mapped_column(Integer, nullable=False, default=86_400)
     access_token_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
-    notification_channel: Mapped[str | None] = mapped_column(String(200), nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     last_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     next_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -45,6 +44,12 @@ class Subscription(Base):
     def token_configured(self) -> bool:
         """标识当前订阅是否已配置加密访问令牌。"""
         return self.access_token_encrypted is not None
+
+    notification_channels: Mapped[list["NotificationChannel"]] = relationship(
+        secondary="subscription_notification_channels",
+        lazy="selectin",
+        overlaps="notification_channel,subscription",
+    )
 
 
 class RepositoryEvent(Base):
@@ -82,14 +87,67 @@ class Report(Base):
 
 
 class NotificationChannel(Base):
-    """通知通道基础配置，预留给后续真实通知系统接入。"""
+    """通知通道基础配置，保存非敏感路由信息。"""
 
     # 通知通道仅保存基础路由信息；Token、签名密钥等敏感项必须来自环境变量。
     __tablename__ = "notification_channels"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    name: Mapped[str] = mapped_column(String(100), nullable=False, unique=True)
+    name: Mapped[str] = mapped_column(String(100), nullable=False)
     channel_type: Mapped[str] = mapped_column(String(30), nullable=False)
     target: Mapped[str] = mapped_column(String(500), nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
+class SubscriptionNotificationChannel(Base):
+    """订阅与通知通道的绑定关系。"""
+
+    __tablename__ = "subscription_notification_channels"
+    __table_args__ = (
+        UniqueConstraint(
+            "subscription_id",
+            "notification_channel_id",
+            name="uq_subscription_notification_channel",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    subscription_id: Mapped[int] = mapped_column(ForeignKey("subscriptions.id"), nullable=False)
+    notification_channel_id: Mapped[int] = mapped_column(
+        ForeignKey("notification_channels.id"),
+        nullable=False,
+    )
+    is_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+    subscription: Mapped[Subscription] = relationship(overlaps="notification_channels")
+    notification_channel: Mapped[NotificationChannel] = relationship(overlaps="notification_channels")
+
+
+class NotificationJob(Base):
+    """报告生成后等待投递的通知任务。"""
+
+    __tablename__ = "notification_jobs"
+    __table_args__ = (UniqueConstraint("dedupe_key", name="uq_notification_job_dedupe_key"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    subscription_id: Mapped[int] = mapped_column(ForeignKey("subscriptions.id"), nullable=False)
+    report_id: Mapped[int] = mapped_column(ForeignKey("reports.id"), nullable=False)
+    notification_channel_id: Mapped[int] = mapped_column(
+        ForeignKey("notification_channels.id"),
+        nullable=False,
+    )
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="pending", index=True)
+    subject: Mapped[str] = mapped_column(String(300), nullable=False)
+    body_markdown: Mapped[str] = mapped_column(Text, nullable=False)
+    retry_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    next_attempt_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    dedupe_key: Mapped[str] = mapped_column(String(100), nullable=False, unique=True)
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    subscription: Mapped[Subscription] = relationship()
+    report: Mapped[Report] = relationship()
+    notification_channel: Mapped[NotificationChannel] = relationship()

@@ -9,8 +9,18 @@ from app.core.errors import ApiError
 from app.db.models import Report, Subscription
 from app.db.session import AsyncSessionLocal
 from app.repositories.reports import list_reports
-from app.repositories.subscriptions import create_subscription, delete_subscription, list_subscriptions
-from app.schemas.subscriptions import SubscriptionCreate
+from app.repositories.subscriptions import (
+    create_subscription,
+    delete_subscription,
+    list_subscriptions,
+    update_subscription,
+)
+from app.schemas.subscriptions import (
+    SubscriptionCreate,
+    SubscriptionUpdate,
+    normalize_notification_channel_name,
+    validate_notification_channel_target,
+)
 from app.services.time_utils import format_report_datetime
 from app.services.time_utils import report_now
 
@@ -321,6 +331,7 @@ def build_gradio_app() -> gr.Blocks:
     with gr.Blocks(title="GitHub Sentinel Dashboard", fill_height=True) as ui:
         gr.HTML("", head=REPORT_PREVIEW_HEAD)
         gr.Markdown("# GitHub Sentinel Dashboard")
+        editing_subscription_id = gr.State(None)
 
         with gr.Tab("订阅仓库"):
             with gr.Row():
@@ -328,9 +339,24 @@ def build_gradio_app() -> gr.Blocks:
                 interval_seconds = gr.Number(label="订阅间隔（秒）", value=86400, precision=0)
             with gr.Row():
                 access_token = gr.Textbox(label="访问令牌（可选）", type="password")
-                notification_channel = gr.Textbox(label="通知通道（可选）")
+                notification_channel_type = gr.Dropdown(
+                    label="通知类型",
+                    choices=[
+                        ("不通知", ""),
+                        ("邮箱 SMTP", "smtp"),
+                        ("企业微信机器人", "wecom"),
+                        ("通用 Webhook", "webhook"),
+                    ],
+                    value="smtp",
+                )
+            notification_channel_target = gr.Textbox(
+                label="通知目标（可选）",
+                placeholder="邮箱填写收件人地址；企业微信/Webhook 填目标标识",
+            )
             with gr.Row():
                 create_button = gr.Button("创建订阅", variant="primary")
+                update_button = gr.Button("保存修改", visible=False)
+                delete_button = gr.Button("删除订阅", visible=False)
                 refresh_button = gr.Button("刷新订阅")
             subscription_status = gr.Markdown()
             subscriptions_table = gr.Dataframe(
@@ -426,6 +452,10 @@ def build_gradio_app() -> gr.Blocks:
                                 min_width=0,
                                 elem_classes=["report-date-field"],
                             )
+                        send_notification_after_generate = gr.Checkbox(
+                            label="生成后发送通知",
+                            value=False,
+                        )
                         generate_button = gr.Button("生成报告", variant="primary")
                     operation_status = gr.Markdown()
                 with gr.Column(scale=2, min_width=520, elem_classes=["report-preview-column"]):
@@ -456,17 +486,35 @@ def build_gradio_app() -> gr.Blocks:
                 subscription_select,
             ],
         )
+        subscription_form_outputs = [
+            repository_url,
+            access_token,
+            interval_seconds,
+            notification_channel_type,
+            notification_channel_target,
+            editing_subscription_id,
+            create_button,
+            update_button,
+            delete_button,
+        ]
         create_button.click(
             create_subscription_from_ui,
-            inputs=[repository_url, access_token, interval_seconds, notification_channel],
+            inputs=[
+                repository_url,
+                access_token,
+                interval_seconds,
+                notification_channel_type,
+                notification_channel_target,
+            ],
             outputs=[
                 subscription_status,
                 subscriptions_table,
                 subscription_select,
+                *subscription_form_outputs,
             ],
         )
         subscriptions_table.select(
-            delete_subscription_from_table,
+            handle_subscription_table_action,
             inputs=[subscriptions_table],
             outputs=[
                 subscription_status,
@@ -475,11 +523,45 @@ def build_gradio_app() -> gr.Blocks:
                 report_select,
                 report_generated_at,
                 report_markdown,
+                *subscription_form_outputs,
+            ],
+        )
+        update_button.click(
+            update_subscription_from_ui,
+            inputs=[
+                editing_subscription_id,
+                interval_seconds,
+                notification_channel_type,
+                notification_channel_target,
+            ],
+            outputs=[
+                subscription_status,
+                subscriptions_table,
+                subscription_select,
+                *subscription_form_outputs,
+            ],
+        )
+        delete_button.click(
+            delete_subscription_from_ui,
+            inputs=[editing_subscription_id],
+            outputs=[
+                subscription_status,
+                subscriptions_table,
+                subscription_select,
+                report_select,
+                report_generated_at,
+                report_markdown,
+                *subscription_form_outputs,
             ],
         )
         generate_button.click(
             generate_report_from_ui,
-            inputs=[subscription_select, generate_start_date, generate_end_date],
+            inputs=[
+                subscription_select,
+                generate_start_date,
+                generate_end_date,
+                send_notification_after_generate,
+            ],
             outputs=[operation_status, report_select, report_generated_at, report_markdown],
         )
         query_reports_button.click(
@@ -520,7 +602,8 @@ async def create_subscription_from_ui(
     repository_url: str,
     access_token: str | None,
     interval_seconds: int | float | None,
-    notification_channel: str | None,
+    notification_channel_type: str | None,
+    notification_channel_target: str | None,
 ):
     """根据页面输入创建订阅。"""
     try:
@@ -528,7 +611,10 @@ async def create_subscription_from_ui(
             repository_url=repository_url,
             access_token=_optional_text(access_token),
             interval_seconds=int(interval_seconds or 86400),
-            notification_channel=_optional_text(notification_channel),
+            notification_channels=_notification_channels_from_ui(
+                notification_channel_type,
+                notification_channel_target,
+            ),
         )
         async with AsyncSessionLocal() as session:
             await create_subscription(session, payload)
@@ -537,6 +623,7 @@ async def create_subscription_from_ui(
             "订阅创建成功。",
             format_subscription_rows(subscriptions),
             gr.update(choices=format_subscription_choices(subscriptions), value=None),
+            *_subscription_form_output_values(_empty_subscription_form_updates()),
         )
     except (ApiError, ValueError) as exc:
         subscriptions = await _list_subscriptions()
@@ -544,6 +631,49 @@ async def create_subscription_from_ui(
             _error_message(exc),
             format_subscription_rows(subscriptions),
             gr.update(choices=format_subscription_choices(subscriptions), value=None),
+            *_subscription_form_output_values(_subscription_form_noop_updates()),
+        )
+
+
+async def update_subscription_from_ui(
+    subscription_id: int | None,
+    interval_seconds: int | float | None,
+    notification_channel_type: str | None,
+    notification_channel_target: str | None,
+):
+    """根据页面输入更新订阅间隔和通知配置。"""
+    if subscription_id is None:
+        subscriptions = await _list_subscriptions()
+        return (
+            "请先在订阅列表点击“修改”。",
+            format_subscription_rows(subscriptions),
+            gr.update(choices=format_subscription_choices(subscriptions), value=None),
+            *_subscription_form_output_values(_empty_subscription_form_updates()),
+        )
+    try:
+        payload = SubscriptionUpdate(
+            interval_seconds=int(interval_seconds or 86400),
+            notification_channels=_notification_channels_from_ui(
+                notification_channel_type,
+                notification_channel_target,
+            ),
+        )
+        async with AsyncSessionLocal() as session:
+            await update_subscription(session, int(subscription_id), payload)
+        subscriptions = await _list_subscriptions()
+        return (
+            "订阅修改成功。",
+            format_subscription_rows(subscriptions),
+            gr.update(choices=format_subscription_choices(subscriptions), value=None),
+            *_subscription_form_output_values(_empty_subscription_form_updates()),
+        )
+    except (ApiError, ValueError) as exc:
+        subscriptions = await _list_subscriptions()
+        return (
+            _error_message(exc),
+            format_subscription_rows(subscriptions),
+            gr.update(choices=format_subscription_choices(subscriptions), value=None),
+            *_subscription_form_output_values(_subscription_form_noop_updates()),
         )
 
 
@@ -551,6 +681,7 @@ async def generate_report_from_ui(
     subscription_id: int | None,
     start_date: str | datetime | date | None,
     end_date: str | datetime | date | None,
+    send_notification: bool | None = False,
 ):
     """按页面选择的日期范围生成报告。"""
     if subscription_id is None:
@@ -568,15 +699,23 @@ async def generate_report_from_ui(
         if parsed_end < parsed_start:
             raise ValueError("结束日期必须大于或等于开始日期。")
         async with AsyncSessionLocal() as session:
-            _, report = await build_sentinel_agent().generate_report_for_date_range(
+            result, report = await build_sentinel_agent().generate_report_for_date_range(
                 session,
                 int(subscription_id),
                 parsed_start,
                 parsed_end,
+                send_notification=bool(send_notification),
             )
         reports = await _list_reports(int(subscription_id))
+        status = f"报告生成成功：{report.name}"
+        if send_notification:
+            status = (
+                f"报告生成成功并已加入通知队列：{report.name}"
+                if result.notification_sent
+                else f"报告生成成功，但该订阅没有启用通知通道：{report.name}"
+            )
         return (
-            f"报告生成成功：{report.name}",
+            status,
             gr.update(choices=format_report_choices(reports), value=report.id),
             _format_report_generated_at(report),
             report.content_markdown,
@@ -642,20 +781,42 @@ async def load_report_content_for_ui(
     return "报告生成时间：未选择报告", "请选择左侧报告后查看内容。"
 
 
-async def delete_subscription_from_table(rows: list[list[object]] | None, evt: gr.SelectData):
-    """点击订阅列表最右侧操作列时删除对应订阅。"""
-    subscription_id = _selected_delete_subscription_id(rows, evt)
-    if subscription_id is None:
-        subscriptions = await _list_subscriptions()
+async def handle_subscription_table_action(rows: list[list[object]] | None, evt: gr.SelectData):
+    """处理订阅列表中的操作列点击。"""
+    subscriptions = await _list_subscriptions()
+
+    edit_subscription_id = _selected_edit_subscription_id(rows, evt)
+    if edit_subscription_id is not None:
+        for subscription in subscriptions:
+            if subscription.id == edit_subscription_id:
+                return (
+                    f"正在修改订阅：{subscription.owner}/{subscription.repo}",
+                    format_subscription_rows(subscriptions),
+                    gr.update(choices=format_subscription_choices(subscriptions), value=None),
+                    gr.update(),
+                    gr.update(),
+                    gr.update(),
+                    *_subscription_form_output_values(_subscription_edit_form_updates(subscription)),
+                )
         return (
-            "请点击订阅列表最右侧的删除操作。",
+            "订阅不存在。",
             format_subscription_rows(subscriptions),
             gr.update(choices=format_subscription_choices(subscriptions), value=None),
-            gr.update(choices=[], value=None),
-            "报告生成时间：未选择报告",
-            "请选择左侧报告后查看内容。",
+            gr.update(),
+            gr.update(),
+            gr.update(),
+            *_subscription_form_output_values(_empty_subscription_form_updates()),
         )
-    return await delete_subscription_from_ui(subscription_id)
+
+    return (
+        "请点击订阅列表中的操作列。",
+        format_subscription_rows(subscriptions),
+        gr.update(choices=format_subscription_choices(subscriptions), value=None),
+        gr.update(),
+        gr.update(),
+        gr.update(),
+        *_subscription_form_output_values(_subscription_form_noop_updates()),
+    )
 
 
 async def delete_subscription_from_ui(subscription_id: int | None):
@@ -671,6 +832,7 @@ async def delete_subscription_from_ui(subscription_id: int | None):
         gr.update(choices=[], value=None),
         "报告生成时间：未选择报告",
         "请选择左侧报告后查看内容。",
+        *_subscription_form_output_values(_empty_subscription_form_updates()),
     )
 
 
@@ -697,7 +859,7 @@ def default_week_date_range() -> tuple[date, date]:
 def format_subscription_choices(subscriptions: list[Subscription]) -> list[tuple[str, int]]:
     """格式化订阅下拉选择项。"""
     return [
-        (f"#{subscription.id} {subscription.platform} {subscription.owner}/{subscription.repo}", subscription.id)
+        (f"{subscription.owner}/{subscription.repo}", subscription.id)
         for subscription in subscriptions
     ]
 
@@ -722,7 +884,7 @@ def format_subscription_rows(subscriptions: list[Subscription]) -> list[list[obj
             _format_optional_datetime(subscription.last_run_at),
             _format_optional_datetime(subscription.next_run_at),
             "启用" if subscription.is_active else "停用",
-            "删除",
+            "修改 / 删除",
         ]
         for subscription in subscriptions
     ]
@@ -805,6 +967,87 @@ def _optional_text(value: str | None) -> str | None:
     return normalized or None
 
 
+def _notification_channels_from_ui(
+    channel_type: str | None,
+    target: str | None,
+) -> list[dict[str, str]]:
+    normalized_type = _optional_text(channel_type)
+    normalized_target = _optional_text(target)
+    if normalized_type is None and normalized_target is None:
+        return []
+    if normalized_type is None or normalized_target is None:
+        raise ValueError("通知类型和通知目标需要同时填写。")
+    validate_notification_channel_target(normalized_type, normalized_target)
+    return [
+        {
+            "name": normalize_notification_channel_name(
+                normalized_type,
+                normalized_target,
+            ),
+            "channel_type": normalized_type,
+            "target": normalized_target,
+        },
+    ]
+
+
+_SUBSCRIPTION_FORM_OUTPUT_KEYS = (
+    "repository_url",
+    "access_token",
+    "interval_seconds",
+    "notification_channel_type",
+    "notification_channel_target",
+    "editing_subscription_id",
+    "create_button",
+    "update_button",
+    "delete_button",
+)
+
+
+def _empty_subscription_form_updates() -> dict[str, object]:
+    return {
+        "repository_url": gr.update(value="", interactive=True),
+        "access_token": gr.update(value="", interactive=True),
+        "interval_seconds": gr.update(value=86400),
+        "notification_channel_type": gr.update(value="smtp"),
+        "notification_channel_target": gr.update(value=""),
+        "editing_subscription_id": None,
+        "create_button": gr.update(visible=True),
+        "update_button": gr.update(visible=False),
+        "delete_button": gr.update(visible=False),
+    }
+
+
+def _subscription_edit_form_updates(subscription: Subscription) -> dict[str, object]:
+    channel = subscription.notification_channels[0] if subscription.notification_channels else None
+    return {
+        "repository_url": gr.update(value=subscription.repository_url, interactive=False),
+        "access_token": gr.update(value="已配置" if subscription.token_configured else "", interactive=False),
+        "interval_seconds": gr.update(value=subscription.interval_seconds),
+        "notification_channel_type": gr.update(value=_notification_channel_value(channel, "channel_type")),
+        "notification_channel_target": gr.update(value=_notification_channel_value(channel, "target")),
+        "editing_subscription_id": subscription.id,
+        "create_button": gr.update(visible=False),
+        "update_button": gr.update(visible=True),
+        "delete_button": gr.update(visible=True),
+    }
+
+
+def _subscription_form_noop_updates() -> dict[str, object]:
+    return {key: gr.update() for key in _SUBSCRIPTION_FORM_OUTPUT_KEYS}
+
+
+def _subscription_form_output_values(updates: dict[str, object]) -> tuple[object, ...]:
+    return tuple(updates[key] for key in _SUBSCRIPTION_FORM_OUTPUT_KEYS)
+
+
+def _notification_channel_value(channel: object | None, key: str) -> str:
+    if channel is None:
+        return ""
+    if isinstance(channel, dict):
+        return str(channel.get(key) or "")
+    return str(getattr(channel, key, "") or "")
+
+
 def _format_optional_datetime(value: datetime | None) -> str:
     if value is None:
         return ""
@@ -812,10 +1055,22 @@ def _format_optional_datetime(value: datetime | None) -> str:
 
 
 def _selected_delete_subscription_id(rows: object | None, evt: gr.SelectData) -> int | None:
+    return None
+
+
+def _selected_edit_subscription_id(rows: object | None, evt: gr.SelectData) -> int | None:
+    return _selected_subscription_id_by_action_column(rows, evt, 8)
+
+
+def _selected_subscription_id_by_action_column(
+    rows: object | None,
+    evt: gr.SelectData,
+    action_column_index: int,
+) -> int | None:
     if rows is None or evt.index is None:
         return None
     row_index, column_index = evt.index
-    if column_index != 8 or row_index >= len(rows):
+    if column_index != action_column_index or row_index >= len(rows):
         return None
     if hasattr(rows, "iloc"):
         return int(rows.iloc[row_index, 0])

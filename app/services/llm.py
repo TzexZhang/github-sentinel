@@ -51,24 +51,30 @@ class OpenAICompatibleLLMClient:
             return await self._generate_with_client(http_client, prompt)
 
     async def _generate_with_client(self, http_client: httpx.AsyncClient, prompt: str) -> str:
-        response = await http_client.post(
-            self.endpoint,
-            headers={
-                "Authorization": f"Bearer {self.api_key}",
-                "Content-Type": "application/json",
-            },
-            json={
-                "model": self.model,
-                "messages": [
-                    {
-                        "role": "system",
-                        "content": REPORT_SYSTEM_PROMPT,
-                    },
-                    {"role": "user", "content": prompt},
-                ],
-                "temperature": 0.2,
-            },
-        )
+        try:
+            response = await http_client.post(
+                self.endpoint,
+                headers={
+                    "Authorization": f"Bearer {self.api_key}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": self.model,
+                    "messages": [
+                        {
+                            "role": "system",
+                            "content": REPORT_SYSTEM_PROMPT,
+                        },
+                        {"role": "user", "content": prompt},
+                    ],
+                    "temperature": 0.2,
+                },
+            )
+        except httpx.TimeoutException as exc:
+            raise LLMError("LLM 服务请求超时，可调大 LLM_TIMEOUT_SECONDS。") from exc
+        except httpx.RequestError as exc:
+            raise LLMError("LLM 服务请求失败。") from exc
+
         if response.status_code >= 400:
             raise LLMError("LLM 服务返回了错误响应。")
 

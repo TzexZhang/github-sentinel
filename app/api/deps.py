@@ -9,7 +9,13 @@ from app.core.config import settings
 from app.db.session import get_session
 from app.services.github_client import HttpRepositoryClient
 from app.services.llm import build_llm_client
-from app.services.notifications import NullNotificationSender
+from app.services.notifications import (
+    NotificationRouter,
+    NullNotificationSender,
+    SmtpNotificationSender,
+    WeComNotificationSender,
+    WebhookNotificationSender,
+)
 from app.services.reporting import MarkdownReportRenderer
 from app.services.sentinel import SentinelAgent
 
@@ -28,6 +34,33 @@ def build_sentinel_agent() -> SentinelAgent:
             model=settings.llm_model,
             base_url=settings.llm_base_url,
             timeout=settings.llm_timeout_seconds,
+        ),
+    )
+
+
+def build_notification_router() -> NotificationRouter:
+    """根据配置构建真实通知通道路由器，供通知 Worker 复用。"""
+    return NotificationRouter(
+        smtp_sender=SmtpNotificationSender(
+            host=settings.notification_smtp_host,
+            port=settings.notification_smtp_port,
+            username=settings.notification_smtp_username,
+            password=settings.notification_smtp_password,
+            from_email=settings.notification_smtp_from_email,
+            use_tls=settings.notification_smtp_use_tls,
+            use_ssl=settings.notification_smtp_use_ssl,
+        ),
+        wecom_sender=WeComNotificationSender(
+            corp_id=settings.notification_wecom_corp_id,
+            agent_id=settings.notification_wecom_agent_id,
+            secret=settings.notification_wecom_secret,
+            default_to_user=settings.notification_wecom_to_user,
+            timeout_seconds=settings.notification_timeout_seconds,
+        ),
+        webhook_sender=WebhookNotificationSender(
+            webhook_url=settings.notification_webhook_url,
+            token=settings.notification_webhook_token,
+            timeout_seconds=settings.notification_timeout_seconds,
         ),
     )
 

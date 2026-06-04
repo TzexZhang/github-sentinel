@@ -4,7 +4,14 @@ import httpx
 
 from app.services.github_client import GitHubActivity
 from app.core.config import Settings
-from app.services.llm import REPORT_SYSTEM_PROMPT, OpenAICompatibleLLMClient, build_llm_client
+import pytest
+
+from app.services.llm import (
+    LLMError,
+    REPORT_SYSTEM_PROMPT,
+    OpenAICompatibleLLMClient,
+    build_llm_client,
+)
 from app.services.reporting import build_repository_report_prompt
 
 
@@ -48,6 +55,23 @@ async def test_openai_compatible_llm_client_generates_markdown_from_chat_complet
     assert "新增功能".encode() in payload
     assert "主要改进".encode() in payload
     assert "修复问题".encode() in payload
+
+
+async def test_openai_compatible_llm_client_wraps_request_timeout_as_llm_error():
+    async def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ReadTimeout("timed out", request=request)
+
+    transport = httpx.MockTransport(handler)
+    async with httpx.AsyncClient(transport=transport) as http_client:
+        client = OpenAICompatibleLLMClient(
+            api_key="test-key",
+            model="glm-4-flash",
+            endpoint="https://open.bigmodel.cn/api/paas/v4/chat/completions",
+            http_client=http_client,
+        )
+
+        with pytest.raises(LLMError, match="LLM 服务请求超时，可调大 LLM_TIMEOUT_SECONDS"):
+            await client.generate_markdown("Summarize repository events.")
 
 
 def test_build_llm_client_defaults_to_zhipu_free_model_when_api_key_is_present():

@@ -8,4 +8,4 @@ url = "sqlite+aiosqlite:///./github_sentinel.db"
 provider = "zhipu"
 model = "glm-4-flash"
 gemini_model = "gemini-2.5-flash"
-timeout_seconds = 30
+timeout_seconds = 120

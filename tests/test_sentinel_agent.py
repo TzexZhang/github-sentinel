@@ -4,7 +4,14 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.db.base import Base
-from app.db.models import Report, RepositoryEvent, Subscription
+from app.db.models import (
+    NotificationChannel,
+    NotificationJob,
+    Report,
+    RepositoryEvent,
+    Subscription,
+    SubscriptionNotificationChannel,
+)
 from app.services.github_client import GitHubActivity
 from app.services.sentinel import SentinelAgent
 
@@ -49,7 +56,7 @@ class FakeLLMClient:
         return "# LLM Report\n\n- Fix login regression"
 
 
-async def test_sentinel_agent_collects_events_generates_report_and_sends_notification():
+async def test_sentinel_agent_collects_events_generates_report_and_creates_notification_jobs():
     engine = create_async_engine("sqlite+aiosqlite:///:memory:", future=True)
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
 
@@ -83,11 +90,36 @@ async def test_sentinel_agent_collects_events_generates_report_and_sends_notific
             repository_url="https://github.com/acme/sentinel",
             interval_seconds=86_400,
             access_token_encrypted="encrypted-token",
-            notification_channel="team-webhook",
         )
         session.add(subscription)
+        webhook = NotificationChannel(
+            name="team-webhook",
+            channel_type="webhook",
+            target="repo-alerts",
+        )
+        mail = NotificationChannel(
+            name="team-mail",
+            channel_type="smtp",
+            target="team@example.com",
+        )
+        session.add_all([webhook, mail])
         await session.commit()
         await session.refresh(subscription)
+        await session.refresh(webhook)
+        await session.refresh(mail)
+        session.add_all(
+            [
+                SubscriptionNotificationChannel(
+                    subscription_id=subscription.id,
+                    notification_channel_id=webhook.id,
+                ),
+                SubscriptionNotificationChannel(
+                    subscription_id=subscription.id,
+                    notification_channel_id=mail.id,
+                ),
+            ],
+        )
+        await session.commit()
 
         agent = SentinelAgent(
             github_client=FakeGitHubClient(activities),
@@ -96,14 +128,27 @@ async def test_sentinel_agent_collects_events_generates_report_and_sends_notific
         )
 
         result = await agent.run_subscription(session, subscription.id)
+        jobs = list((await session.execute(select(NotificationJob))).scalars().all())
 
     assert result.subscription_id == subscription.id
     assert result.fetched_events == 2
     assert result.stored_events == 1
     assert result.report_id is not None
-    assert sender.messages == [
+    assert result.notification_sent is False
+    assert sender.messages == []
+    assert [
+        (job.notification_channel_id, job.status, job.subject, job.body_markdown)
+        for job in jobs
+    ] == [
         (
-            "team-webhook",
+            webhook.id,
+            "pending",
+            f"acme_sentinel_{datetime.now(timezone.utc).date().isoformat()}",
+            "acme/sentinel: Fix login regression",
+        ),
+        (
+            mail.id,
+            "pending",
             f"acme_sentinel_{datetime.now(timezone.utc).date().isoformat()}",
             "acme/sentinel: Fix login regression",
         ),
@@ -138,11 +183,25 @@ async def test_sentinel_agent_generates_report_when_run_has_no_new_events():
             repo="sentinel",
             repository_url="https://github.com/acme/sentinel",
             interval_seconds=86_400,
-            notification_channel="team-webhook",
         )
         session.add(subscription)
         await session.commit()
         await session.refresh(subscription)
+        channel = NotificationChannel(
+            name="team-webhook",
+            channel_type="webhook",
+            target="repo-alerts",
+        )
+        session.add(channel)
+        await session.commit()
+        await session.refresh(channel)
+        session.add(
+            SubscriptionNotificationChannel(
+                subscription_id=subscription.id,
+                notification_channel_id=channel.id,
+            ),
+        )
+        await session.commit()
 
         agent = SentinelAgent(
             github_client=FakeGitHubClient(activities),
@@ -152,15 +211,15 @@ async def test_sentinel_agent_generates_report_when_run_has_no_new_events():
 
         first_result = await agent.run_subscription(session, subscription.id)
         second_result = await agent.run_subscription(session, subscription.id)
-        reports = list((await session.execute(select(Report))).scalars().all())
+        jobs = list((await session.execute(select(NotificationJob))).scalars().all())
 
     assert first_result.stored_events == 1
     assert first_result.report_id is not None
     assert second_result.stored_events == 0
     assert second_result.report_id == first_result.report_id
-    assert len(reports) == 1
-    assert reports[0].content_markdown == "acme/sentinel: Fix login regression"
-    assert len(sender.messages) == 2
+    assert len(jobs) == 1
+    assert jobs[0].dedupe_key == f"{first_result.report_id}:{channel.id}"
+    assert len(sender.messages) == 0
 
     await engine.dispose()
 
@@ -206,6 +265,74 @@ async def test_manual_current_report_generates_when_no_incremental_events_or_exi
     assert report.period_end_date == report_date
     assert report.content_markdown == "acme/sentinel: "
     assert len(reports) == 1
+
+    await engine.dispose()
+
+
+async def test_manual_historical_existing_report_creates_notification_jobs_when_requested():
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:", future=True)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+
+    async with session_factory() as session:
+        subscription = Subscription(
+            platform="github",
+            owner="acme",
+            repo="sentinel",
+            repository_url="https://github.com/acme/sentinel",
+            interval_seconds=86_400,
+        )
+        channel = NotificationChannel(
+            name="team-mail",
+            channel_type="smtp",
+            target="team@example.com",
+        )
+        session.add_all([subscription, channel])
+        await session.commit()
+        await session.refresh(subscription)
+        await session.refresh(channel)
+        report = Report(
+            subscription_id=subscription.id,
+            name="acme_sentinel_2026-06-01_2026-06-02",
+            content_markdown="# report",
+            generated_at=datetime(2026, 6, 2, tzinfo=timezone.utc),
+            period_start_date=datetime(2026, 6, 1, tzinfo=timezone.utc).date(),
+            period_end_date=datetime(2026, 6, 2, tzinfo=timezone.utc).date(),
+        )
+        session.add_all(
+            [
+                report,
+                SubscriptionNotificationChannel(
+                    subscription_id=subscription.id,
+                    notification_channel_id=channel.id,
+                ),
+            ],
+        )
+        await session.commit()
+        await session.refresh(report)
+
+        agent = SentinelAgent(
+            github_client=FakeGitHubClient([]),
+            report_renderer=FakeReportRenderer(),
+            notification_sender=RecordingNotificationSender(),
+        )
+
+        result, returned_report = await agent.generate_report_for_date_range(
+            session,
+            subscription.id,
+            report.period_start_date,
+            report.period_end_date,
+            send_notification=True,
+        )
+        jobs = list((await session.execute(select(NotificationJob))).scalars().all())
+
+    assert returned_report.id == report.id
+    assert result.notification_sent is True
+    assert [(job.report_id, job.notification_channel_id, job.status) for job in jobs] == [
+        (report.id, channel.id, "pending"),
+    ]
 
     await engine.dispose()
 

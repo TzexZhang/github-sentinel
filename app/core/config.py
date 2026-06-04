@@ -56,11 +56,34 @@ class Settings(BaseSettings):
     llm_api_key: str | None = Field(default=None, repr=False)
     zhipu_api_key: str | None = Field(default=None, repr=False)
     gemini_api_key: str | None = Field(default=None, repr=False)
-    llm_timeout_seconds: float = float(llm_config.get("timeout_seconds", 30.0))
+    llm_timeout_seconds: float = float(llm_config.get("timeout_seconds", 120.0))
     log_level: str = "INFO"
     log_format: str = "json"
     scheduler_enabled: bool = True
     scheduler_tick_seconds: int = Field(default=30, ge=1)
+    notification_smtp_host: str | None = None
+    notification_smtp_port: int = Field(default=587, ge=1, le=65_535)
+    notification_smtp_username: str | None = Field(default=None, repr=False)
+    notification_smtp_password: str | None = Field(default=None, repr=False)
+    notification_smtp_from_email: str | None = None
+    notification_smtp_use_tls: bool = True
+    notification_smtp_use_ssl: bool = False
+    notification_wecom_corp_id: str | None = Field(default=None, repr=False)
+    notification_wecom_agent_id: str | None = Field(default=None, repr=False)
+    notification_wecom_secret: str | None = Field(default=None, repr=False)
+    notification_wecom_to_user: str | None = None
+    notification_wecom_callback_url: str | None = None
+    notification_wecom_callback_token: str | None = Field(default=None, repr=False)
+    notification_wecom_callback_encoding_aes_key: str | None = Field(default=None, repr=False)
+    notification_wecom_webhook_url: str | None = Field(default=None, repr=False)
+    notification_wecom_webhook_key: str | None = Field(default=None, repr=False)
+    notification_dingtalk_webhook_url: str | None = Field(default=None, repr=False)
+    notification_dingtalk_secret: str | None = Field(default=None, repr=False)
+    notification_webhook_url: str | None = Field(default=None, repr=False)
+    notification_webhook_token: str | None = Field(default=None, repr=False)
+    notification_timeout_seconds: float = Field(default=10.0, ge=1.0)
+    notification_worker_enabled: bool = False
+    notification_worker_tick_seconds: int = Field(default=30, ge=1)
 
     @property
     def resolved_llm_api_key(self) -> str | None:
@@ -73,6 +96,11 @@ class Settings(BaseSettings):
         if provider == "gemini":
             return self.gemini_api_key
         return None
+
+    @property
+    def resolved_notification_wecom_webhook_url(self) -> str | None:
+        """解析企业微信 Webhook URL，兼容旧钉钉变量名。"""
+        return self.notification_wecom_webhook_url or self.notification_dingtalk_webhook_url
 
 
 settings = Settings()

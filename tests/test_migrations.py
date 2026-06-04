@@ -1,7 +1,7 @@
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine
 
-from app.db.migrations import ensure_subscription_columns
+from app.db.migrations import ensure_notification_channel_table, ensure_subscription_columns
 
 
 async def test_subscription_migration_drops_stale_legacy_table_before_rebuild():
@@ -63,5 +63,68 @@ async def test_subscription_migration_drops_stale_legacy_table_before_rebuild():
         "sentinel",
         "https://github.com/acme/sentinel",
     )
+
+    await engine.dispose()
+
+
+async def test_notification_channel_migration_removes_global_name_unique_constraint():
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:", future=True)
+
+    async with engine.begin() as connection:
+        await connection.execute(
+            text(
+                """
+                CREATE TABLE notification_channels (
+                    id INTEGER NOT NULL PRIMARY KEY,
+                    name VARCHAR(100) NOT NULL UNIQUE,
+                    channel_type VARCHAR(30) NOT NULL,
+                    target VARCHAR(500) NOT NULL,
+                    is_active BOOLEAN NOT NULL,
+                    created_at DATETIME
+                )
+                """,
+            ),
+        )
+        await connection.execute(
+            text(
+                """
+                INSERT INTO notification_channels (
+                    id,
+                    name,
+                    channel_type,
+                    target,
+                    is_active,
+                    created_at
+                )
+                VALUES (1, 'team-mail', 'smtp', 'sentinel@example.com', 1, CURRENT_TIMESTAMP)
+                """,
+            ),
+        )
+
+        await ensure_notification_channel_table(connection)
+
+        await connection.execute(
+            text(
+                """
+                INSERT INTO notification_channels (
+                    id,
+                    name,
+                    channel_type,
+                    target,
+                    is_active,
+                    created_at
+                )
+                VALUES (2, 'team-mail', 'smtp', 'frontend@example.com', 1, CURRENT_TIMESTAMP)
+                """,
+            ),
+        )
+        rows_result = await connection.execute(
+            text("SELECT name, target FROM notification_channels ORDER BY id"),
+        )
+
+    assert rows_result.fetchall() == [
+        ("team-mail", "sentinel@example.com"),
+        ("team-mail", "frontend@example.com"),
+    ]
 
     await engine.dispose()

@@ -1,6 +1,6 @@
 [project]
 name = "github-sentinel"
-version = "0.0.3"
+version = "0.0.4"
 description = "用于订阅 GitHub/Gitee 仓库、抓取更新、生成报告并推送通知的开源 AI Agent 工具。"
 requires-python = ">=3.12"
 license = "MIT"

@@ -10,10 +10,11 @@ from app.repositories.subscriptions import (
     create_subscription,
     delete_subscription,
     list_subscriptions,
+    update_subscription,
 )
 from app.schemas.reports import ReportGenerateRequest, ReportRead
 from app.schemas.responses import ApiResponse, success_response
-from app.schemas.subscriptions import SubscriptionCreate, SubscriptionRead
+from app.schemas.subscriptions import SubscriptionCreate, SubscriptionRead, SubscriptionUpdate
 
 router = APIRouter(prefix="/subscriptions", tags=["subscriptions"])
 
@@ -37,6 +38,17 @@ async def list_subscriptions_endpoint(session: DbSession) -> dict[str, object]:
         for subscription in subscriptions
     ]
     return success_response(data)
+
+
+@router.patch("/{subscription_id}", response_model=ApiResponse)
+async def update_subscription_endpoint(
+    subscription_id: int,
+    payload: SubscriptionUpdate,
+    session: DbSession,
+) -> dict[str, object]:
+    """更新订阅间隔和通知通道配置，不允许修改仓库地址。"""
+    subscription = await update_subscription(session, subscription_id, payload)
+    return success_response(SubscriptionRead.model_validate(subscription).model_dump())
 
 
 @router.post("/{subscription_id}/reports", response_model=ApiResponse, status_code=201)
