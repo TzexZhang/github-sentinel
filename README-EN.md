@@ -234,15 +234,11 @@ This project uses `uv` to manage Python versions, virtual environments, and depe
 uv sync --group dev
 ```
 
-### 6.2 Create Local Database File
+### 6.2 Database File
 
-Before the first startup, manually create the SQLite database file in the project root:
+The default SQLite database path is `./data/github_sentinel.db`. On first startup, the application automatically creates the database file and any missing tables.
 
-```powershell
-New-Item -ItemType File -Path .\github_sentinel.db -Force
-```
-
-The application creates missing tables on startup.
+For Docker deployments, `docker-compose.yml` mounts host `./data` to container `/app/data` to persist the database file. Do not manually create an empty database file; if production already has an old database file, migrate it before switching `DATABASE_URL`.
 
 ### 6.3 Start The Service
 
