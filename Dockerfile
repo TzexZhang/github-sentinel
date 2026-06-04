@@ -3,6 +3,7 @@ FROM ghcr.io/astral-sh/uv:python3.12-bookworm
 WORKDIR /app
 
 ENV PYTHONUNBUFFERED=1
+ENV UV_INDEX_URL=https://mirrors.aliyun.com/pypi/simple
 
 COPY pyproject.toml uv.lock ./
 RUN uv sync --frozen --no-dev
