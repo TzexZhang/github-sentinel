@@ -6,8 +6,17 @@ async def test_health_check_returns_ok(client):
     assert response.json() == {"code": 200, "data": {"status": "ok"}, "success": True}
 
 
+async def test_runtime_status_returns_instance_id(client):
+    response = await client.get("/api/runtime")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert isinstance(payload["instance_id"], str)
+    assert payload["instance_id"]
+
+
 async def test_dashboard_route_serves_gradio_ui(client):
     response = await client.get("/dashboard/")
 
     assert response.status_code == 200
-    assert "GitHub Sentinel Dashboard" in response.text
+    assert "Git Sentinel Dashboard" in response.text

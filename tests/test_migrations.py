@@ -1,7 +1,11 @@
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine
 
-from app.db.migrations import ensure_notification_channel_table, ensure_subscription_columns
+from app.db.migrations import (
+    ensure_notification_channel_table,
+    ensure_notification_job_table,
+    ensure_subscription_columns,
+)
 
 
 async def test_subscription_migration_drops_stale_legacy_table_before_rebuild():
@@ -126,5 +130,80 @@ async def test_notification_channel_migration_removes_global_name_unique_constra
         ("team-mail", "sentinel@example.com"),
         ("team-mail", "frontend@example.com"),
     ]
+
+    await engine.dispose()
+
+
+async def test_notification_job_migration_removes_body_markdown_and_adds_pending_index():
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:", future=True)
+
+    async with engine.begin() as connection:
+        await connection.execute(
+            text(
+                """
+                CREATE TABLE notification_jobs (
+                    id INTEGER NOT NULL PRIMARY KEY,
+                    subscription_id INTEGER NOT NULL,
+                    report_id INTEGER NOT NULL,
+                    notification_channel_id INTEGER NOT NULL,
+                    status VARCHAR(20) NOT NULL,
+                    subject VARCHAR(300) NOT NULL,
+                    body_markdown TEXT NOT NULL,
+                    retry_count INTEGER NOT NULL,
+                    next_attempt_at DATETIME,
+                    dedupe_key VARCHAR(100) NOT NULL,
+                    last_error TEXT,
+                    created_at DATETIME,
+                    sent_at DATETIME
+                )
+                """,
+            ),
+        )
+        await connection.execute(
+            text(
+                """
+                INSERT INTO notification_jobs (
+                    id,
+                    subscription_id,
+                    report_id,
+                    notification_channel_id,
+                    status,
+                    subject,
+                    body_markdown,
+                    retry_count,
+                    next_attempt_at,
+                    dedupe_key,
+                    created_at
+                )
+                VALUES (
+                    1,
+                    10,
+                    20,
+                    30,
+                    'pending',
+                    'report',
+                    '# duplicated body',
+                    0,
+                    CURRENT_TIMESTAMP,
+                    '20:30',
+                    CURRENT_TIMESTAMP
+                )
+                """,
+            ),
+        )
+
+        await ensure_notification_job_table(connection)
+
+        columns_result = await connection.execute(text("PRAGMA table_info(notification_jobs)"))
+        columns = {row[1] for row in columns_result.fetchall()}
+        index_result = await connection.execute(text("PRAGMA index_list(notification_jobs)"))
+        indexes = {row[1] for row in index_result.fetchall()}
+        row_result = await connection.execute(
+            text("SELECT id, subscription_id, report_id, subject, dedupe_key FROM notification_jobs"),
+        )
+
+    assert "body_markdown" not in columns
+    assert "ix_notification_jobs_status_next_attempt_at" in indexes
+    assert row_result.fetchone() == (1, 10, 20, "report", "20:30")
 
     await engine.dispose()

@@ -4,7 +4,7 @@
 """
 from datetime import date, datetime, timezone
 
-from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Index, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
@@ -21,9 +21,12 @@ class Subscription(Base):
 
     # 用户订阅的代码托管仓库，同一个 platform/owner/repo 只允许订阅一次。
     __tablename__ = "subscriptions"
-    __table_args__ = (UniqueConstraint("platform", "owner", "repo", name="uq_subscription_repo"),)
+    __table_args__ = (
+        UniqueConstraint("user_id", "platform", "owner", "repo", name="uq_subscription_user_repo"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False, default=1, index=True)
     platform: Mapped[str] = mapped_column(String(20), nullable=False, default="github", index=True)
     owner: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
     repo: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
@@ -50,6 +53,43 @@ class Subscription(Base):
         lazy="selectin",
         overlaps="notification_channel,subscription",
     )
+    user: Mapped["User"] = relationship()
+
+
+class User(Base):
+    """本地仪表盘和 API 登录账号。"""
+
+    __tablename__ = "users"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    username: Mapped[str] = mapped_column(String(100), nullable=False, unique=True, index=True)
+    password_hash: Mapped[str] = mapped_column(String(300), nullable=False)
+    display_name: Mapped[str] = mapped_column(String(100), nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    is_admin: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=utc_now,
+        onupdate=utc_now,
+    )
+
+
+class UserSession(Base):
+    """服务端登录会话，仅持久化会话令牌哈希。"""
+
+    __tablename__ = "user_sessions"
+    __table_args__ = (UniqueConstraint("token_hash", name="uq_user_session_token_hash"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
+    token_hash: Mapped[str] = mapped_column(String(128), nullable=False, unique=True, index=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    user: Mapped[User] = relationship()
 
 
 class RepositoryEvent(Base):
@@ -93,11 +133,13 @@ class NotificationChannel(Base):
     __tablename__ = "notification_channels"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False, default=1, index=True)
     name: Mapped[str] = mapped_column(String(100), nullable=False)
     channel_type: Mapped[str] = mapped_column(String(30), nullable=False)
     target: Mapped[str] = mapped_column(String(500), nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    user: Mapped[User] = relationship()
 
 
 class SubscriptionNotificationChannel(Base):
@@ -129,7 +171,10 @@ class NotificationJob(Base):
     """报告生成后等待投递的通知任务。"""
 
     __tablename__ = "notification_jobs"
-    __table_args__ = (UniqueConstraint("dedupe_key", name="uq_notification_job_dedupe_key"),)
+    __table_args__ = (
+        UniqueConstraint("dedupe_key", name="uq_notification_job_dedupe_key"),
+        Index("ix_notification_jobs_status_next_attempt_at", "status", "next_attempt_at"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     subscription_id: Mapped[int] = mapped_column(ForeignKey("subscriptions.id"), nullable=False)
@@ -140,7 +185,6 @@ class NotificationJob(Base):
     )
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="pending", index=True)
     subject: Mapped[str] = mapped_column(String(300), nullable=False)
-    body_markdown: Mapped[str] = mapped_column(Text, nullable=False)
     retry_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     next_attempt_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
     dedupe_key: Mapped[str] = mapped_column(String(100), nullable=False, unique=True)

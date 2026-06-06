@@ -2,11 +2,16 @@
 
 from typing import Annotated
 
-from fastapi import Depends
+from dataclasses import dataclass
+
+from fastapi import Depends, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
+from app.core.errors import ApiError
 from app.db.session import get_session
+from app.db.models import User
+from app.repositories.users import get_user_by_session_token
 from app.services.github_client import HttpRepositoryClient
 from app.services.llm import build_llm_client
 from app.services.notifications import (
@@ -20,6 +25,37 @@ from app.services.reporting import MarkdownReportRenderer
 from app.services.sentinel import SentinelAgent
 
 DbSession = Annotated[AsyncSession, Depends(get_session)]
+
+
+@dataclass(frozen=True)
+class AuthContext:
+    """当前请求的鉴权上下文，包含用户和可选会话令牌。"""
+
+    user: User
+    session_token: str | None
+
+
+async def get_current_user(request: Request, session: DbSession) -> AuthContext:
+    """从 Cookie 会话中解析当前登录用户。"""
+    token = request.cookies.get(settings.auth_cookie_name)
+    if not token:
+        raise ApiError(
+            status_code=401,
+            code="authentication_required",
+            message="请先登录。",
+        )
+
+    user = await get_user_by_session_token(session, token)
+    if user is None:
+        raise ApiError(
+            status_code=401,
+            code="authentication_required",
+            message="请先登录。",
+        )
+    return AuthContext(user=user, session_token=token)
+
+
+CurrentUser = Annotated[AuthContext, Depends(get_current_user)]
 
 
 def build_sentinel_agent() -> SentinelAgent:

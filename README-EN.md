@@ -1,10 +1,10 @@
-# GitHub Sentinel
+# Git Sentinel
 
 English | [简体中文](README.md)
 
-GitHub Sentinel is an open-source utility AI Agent designed for developers and project managers. It regularly retrieves and summarizes the latest updates from subscribed GitHub repositories, forming a complete project-tracking workflow around subscription management, update retrieval, notifications, report generation, and multi-model summaries.
+Git Sentinel is an open-source utility AI Agent designed for developers and project managers. It regularly retrieves and summarizes the latest updates from subscribed GitHub/Gitee repositories, forming a complete project-tracking workflow around subscription management, update retrieval, notifications, report generation, and multi-model summaries.
 
-By collecting and delivering repository updates in time, GitHub Sentinel helps teams improve collaboration efficiency and project management visibility. It enables users to track project progress, respond to changes faster, and keep projects observable, traceable, and synchronized.
+By collecting and delivering repository updates in time, Git Sentinel helps teams improve collaboration efficiency and project management visibility. It enables users to track project progress, respond to changes faster, and keep projects observable, traceable, and synchronized.
 
 ## Table of Contents
 
@@ -18,7 +18,7 @@ By collecting and delivering repository updates in time, GitHub Sentinel helps t
 
 ## 1. Project Positioning
 
-GitHub Sentinel focuses on repository subscription, update retrieval, notification delivery, and report generation.
+Git Sentinel focuses on repository subscription, update retrieval, notification delivery, and report generation.
 
 It is not just a repository browser. It acts as a repository sentinel for team collaboration: after users subscribe to repositories, the system retrieves updates, organizes information, generates reports, and provides a unified entry point for notification delivery.
 
@@ -243,7 +243,7 @@ For Docker deployments, `docker-compose.yml` mounts host `./data` to container `
 ### 6.3 Start The Service
 
 ```powershell
-uv run python -m uvicorn app.main:create_app --factory --reload
+uv run python -m uvicorn app.main:create_app --factory --reload --timeout-graceful-shutdown 1 --timeout-keep-alive 1
 ```
 
 After startup, open:
@@ -253,6 +253,8 @@ After startup, open:
 | Service Home | `http://127.0.0.1:8000/` |
 | API Docs | `http://127.0.0.1:8000/docs` |
 | Health Check | `http://127.0.0.1:8000/api/health` |
+
+During local development, the Dashboard keeps Gradio frontend connections open. On Windows, when `--reload` stops at `Waiting for connections to close` after code changes, use the `--timeout-graceful-shutdown 1` flag shown above so stale connections are released quickly during reload.
 
 On Windows, if `uv run uvicorn app.main:create_app --factory --reload` fails with `Failed to canonicalize script path`, use the `uv run python -m uvicorn ...` command above.
 

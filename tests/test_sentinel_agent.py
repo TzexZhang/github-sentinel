@@ -137,20 +137,20 @@ async def test_sentinel_agent_collects_events_generates_report_and_creates_notif
     assert result.notification_sent is False
     assert sender.messages == []
     assert [
-        (job.notification_channel_id, job.status, job.subject, job.body_markdown)
+        (job.notification_channel_id, job.status, job.subject, job.report_id)
         for job in jobs
     ] == [
         (
             webhook.id,
             "pending",
             f"acme_sentinel_{datetime.now(timezone.utc).date().isoformat()}",
-            "acme/sentinel: Fix login regression",
+            result.report_id,
         ),
         (
             mail.id,
             "pending",
             f"acme_sentinel_{datetime.now(timezone.utc).date().isoformat()}",
-            "acme/sentinel: Fix login regression",
+            result.report_id,
         ),
     ]
 

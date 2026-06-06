@@ -65,6 +65,15 @@ async def ensure_notification_channel_table(connection: AsyncConnection) -> None
     if not existing_columns:
         return
 
+    if "user_id" not in existing_columns:
+        await connection.execute(
+            text("ALTER TABLE notification_channels ADD COLUMN user_id INTEGER NOT NULL DEFAULT 1"),
+        )
+        await connection.execute(
+            text("CREATE INDEX IF NOT EXISTS ix_notification_channels_user_id ON notification_channels (user_id)"),
+        )
+        existing_columns.add("user_id")
+
     index_result = await connection.execute(text("PRAGMA index_list(notification_channels)"))
     has_unique_name_index = False
     for row in index_result.fetchall():
@@ -88,6 +97,7 @@ async def ensure_notification_channel_table(connection: AsyncConnection) -> None
             """
             CREATE TABLE notification_channels (
                 id INTEGER NOT NULL PRIMARY KEY,
+                user_id INTEGER NOT NULL DEFAULT 1,
                 name VARCHAR(100) NOT NULL,
                 channel_type VARCHAR(30) NOT NULL,
                 target VARCHAR(500) NOT NULL,
@@ -102,6 +112,7 @@ async def ensure_notification_channel_table(connection: AsyncConnection) -> None
             """
             INSERT INTO notification_channels (
                 id,
+                user_id,
                 name,
                 channel_type,
                 target,
@@ -110,6 +121,7 @@ async def ensure_notification_channel_table(connection: AsyncConnection) -> None
             )
             SELECT
                 id,
+                user_id,
                 name,
                 channel_type,
                 target,
@@ -123,10 +135,123 @@ async def ensure_notification_channel_table(connection: AsyncConnection) -> None
     await connection.execute(text("PRAGMA foreign_keys=ON"))
 
 
+async def ensure_notification_job_table(connection: AsyncConnection) -> None:
+    """确保通知任务不复制报告正文，并具备 pending 扫描索引。"""
+    result = await connection.execute(text("PRAGMA table_info(notification_jobs)"))
+    existing_columns = {row[1] for row in result.fetchall()}
+    if not existing_columns:
+        return
+
+    desired_columns = {
+        "id",
+        "subscription_id",
+        "report_id",
+        "notification_channel_id",
+        "status",
+        "subject",
+        "retry_count",
+        "next_attempt_at",
+        "dedupe_key",
+        "last_error",
+        "created_at",
+        "sent_at",
+    }
+    if existing_columns != desired_columns:
+        await _rebuild_notification_jobs_table(connection, existing_columns)
+
+    await connection.execute(
+        text(
+            """
+            CREATE INDEX IF NOT EXISTS ix_notification_jobs_status_next_attempt_at
+            ON notification_jobs (status, next_attempt_at)
+            """,
+        ),
+    )
+
+
+async def _rebuild_notification_jobs_table(
+    connection: AsyncConnection,
+    existing_columns: set[str],
+) -> None:
+    await connection.execute(text("DROP TABLE IF EXISTS notification_jobs_legacy"))
+    await connection.execute(text("ALTER TABLE notification_jobs RENAME TO notification_jobs_legacy"))
+    await connection.execute(text("DROP INDEX IF EXISTS ix_notification_jobs_status"))
+    await connection.execute(text("DROP INDEX IF EXISTS ix_notification_jobs_next_attempt_at"))
+    await connection.execute(text("DROP INDEX IF EXISTS ix_notification_jobs_status_next_attempt_at"))
+    await connection.execute(text("DROP INDEX IF EXISTS ix_notification_jobs_dedupe_key"))
+    await connection.execute(
+        text(
+            """
+            CREATE TABLE notification_jobs (
+                id INTEGER NOT NULL PRIMARY KEY,
+                subscription_id INTEGER NOT NULL,
+                report_id INTEGER NOT NULL,
+                notification_channel_id INTEGER NOT NULL,
+                status VARCHAR(20) NOT NULL,
+                subject VARCHAR(300) NOT NULL,
+                retry_count INTEGER NOT NULL,
+                next_attempt_at DATETIME,
+                dedupe_key VARCHAR(100) NOT NULL,
+                last_error TEXT,
+                created_at DATETIME,
+                sent_at DATETIME,
+                CONSTRAINT uq_notification_job_dedupe_key UNIQUE (dedupe_key),
+                FOREIGN KEY(subscription_id) REFERENCES subscriptions (id),
+                FOREIGN KEY(report_id) REFERENCES reports (id),
+                FOREIGN KEY(notification_channel_id) REFERENCES notification_channels (id)
+            )
+            """,
+        ),
+    )
+    if {"id", "subscription_id", "report_id", "notification_channel_id", "subject", "dedupe_key"}.issubset(
+        existing_columns,
+    ):
+        await connection.execute(
+            text(
+                f"""
+                INSERT OR IGNORE INTO notification_jobs (
+                    id,
+                    subscription_id,
+                    report_id,
+                    notification_channel_id,
+                    status,
+                    subject,
+                    retry_count,
+                    next_attempt_at,
+                    dedupe_key,
+                    last_error,
+                    created_at,
+                    sent_at
+                )
+                SELECT
+                    id,
+                    subscription_id,
+                    report_id,
+                    notification_channel_id,
+                    {_column_or_default(existing_columns, "status", "'pending'")},
+                    subject,
+                    {_column_or_default(existing_columns, "retry_count", "0")},
+                    {_column_or_default(existing_columns, "next_attempt_at", "CURRENT_TIMESTAMP")},
+                    dedupe_key,
+                    {_column_or_default(existing_columns, "last_error", "NULL")},
+                    {_column_or_default(existing_columns, "created_at", "CURRENT_TIMESTAMP")},
+                    {_column_or_default(existing_columns, "sent_at", "NULL")}
+                FROM notification_jobs_legacy
+                """,
+            ),
+        )
+    await connection.execute(text("DROP TABLE notification_jobs_legacy"))
+
+
+def _column_or_default(existing_columns: set[str], column: str, default_expression: str) -> str:
+    return column if column in existing_columns else default_expression
+
+
 def _requires_subscription_rebuild(existing_columns: set[str]) -> bool:
     """判断现有 subscriptions 表列集合是否需要重建。"""
     desired_columns = {
         "id",
+        "user_id",
         "platform",
         "owner",
         "repo",
@@ -157,6 +282,7 @@ async def _rebuild_subscriptions_table(
             """
             CREATE TABLE subscriptions (
                 id INTEGER NOT NULL PRIMARY KEY,
+                user_id INTEGER NOT NULL DEFAULT 1,
                 platform VARCHAR(20) NOT NULL DEFAULT 'github',
                 owner VARCHAR(100) NOT NULL,
                 repo VARCHAR(100) NOT NULL,
@@ -168,12 +294,13 @@ async def _rebuild_subscriptions_table(
                 next_run_at DATETIME,
                 created_at DATETIME,
                 updated_at DATETIME,
-                CONSTRAINT uq_subscription_repo UNIQUE (platform, owner, repo)
+                CONSTRAINT uq_subscription_user_repo UNIQUE (user_id, platform, owner, repo)
             )
             """,
         ),
     )
     await connection.execute(text("CREATE INDEX ix_subscriptions_platform ON subscriptions (platform)"))
+    await connection.execute(text("CREATE INDEX ix_subscriptions_user_id ON subscriptions (user_id)"))
     await connection.execute(text("CREATE INDEX ix_subscriptions_owner ON subscriptions (owner)"))
     await connection.execute(text("CREATE INDEX ix_subscriptions_repo ON subscriptions (repo)"))
 
@@ -183,6 +310,7 @@ async def _rebuild_subscriptions_table(
             if "platform" in existing_columns
             else "'github'"
         )
+        user_id_expression = "user_id" if "user_id" in existing_columns else "1"
         repository_url_expression = _repository_url_expression(existing_columns)
         interval_expression = "interval_seconds" if "interval_seconds" in existing_columns else "86400"
         token_expression = (
@@ -199,6 +327,7 @@ async def _rebuild_subscriptions_table(
                 f"""
                 INSERT OR IGNORE INTO subscriptions (
                     id,
+                    user_id,
                     platform,
                     owner,
                     repo,
@@ -213,6 +342,7 @@ async def _rebuild_subscriptions_table(
                 )
                 SELECT
                     id,
+                    {user_id_expression},
                     {platform_expression},
                     owner,
                     repo,

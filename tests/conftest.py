@@ -10,16 +10,21 @@ from app.main import create_app
 
 
 @pytest.fixture
-async def client() -> AsyncIterator[AsyncClient]:
-    # 每个测试使用独立内存数据库，保证用例之间没有状态污染。
+async def session_factory():
     engine = create_async_engine("sqlite+aiosqlite:///:memory:", future=True)
-    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
 
     async with engine.begin() as connection:
         await connection.run_sync(Base.metadata.create_all)
 
+    yield factory
+
+    await engine.dispose()
+
+
+@pytest.fixture
+async def anonymous_client(session_factory) -> AsyncIterator[AsyncClient]:
     async def override_get_session() -> AsyncIterator[AsyncSession]:
-        # 覆盖生产数据库依赖，让 API 测试只访问测试数据库。
         async with session_factory() as session:
             yield session
 
@@ -30,4 +35,12 @@ async def client() -> AsyncIterator[AsyncClient]:
     async with AsyncClient(transport=transport, base_url="http://testserver") as test_client:
         yield test_client
 
-    await engine.dispose()
+
+@pytest.fixture
+async def client(anonymous_client: AsyncClient) -> AsyncIterator[AsyncClient]:
+    response = await anonymous_client.post(
+        "/api/auth/login",
+        json={"username": "admin", "password": "admin123"},
+    )
+    assert response.status_code == 200
+    yield anonymous_client

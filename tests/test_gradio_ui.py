@@ -2,6 +2,7 @@ from datetime import date, datetime
 
 import pytest
 
+import app.ui.gradio_app as gradio_app
 from app.db.models import Report, Subscription
 from app.ui.gradio_app import (
     _empty_subscription_form_updates,
@@ -11,6 +12,7 @@ from app.ui.gradio_app import (
     _subscription_edit_form_updates,
     build_gradio_app,
     default_week_date_range,
+    format_report_management_choices,
     format_report_choices,
     format_subscription_choices,
     format_subscription_rows,
@@ -40,8 +42,12 @@ def test_build_gradio_app_contains_core_ui_labels():
     assert isinstance(ui, gradio.Blocks)
     assert style_component["props"]["visible"] is True
     assert preview_component["props"]["elem_id"] == "report-preview"
-    assert "GitHub Sentinel Dashboard" in config["title"]
+    assert "Git Sentinel Dashboard" in config["title"]
     assert "报告中心" in str(config)
+    assert "报告管理" in str(config)
+    assert "用户管理" in str(config)
+    assert "/api/runtime" in str(config)
+    assert "refreshPageAfterBackendReload" in str(config)
     assert "report-center-shell" in str(config)
     assert "report-controls" in str(config)
     assert "report-select-row" in str(config)
@@ -96,6 +102,15 @@ def test_build_gradio_app_contains_core_ui_labels():
     assert "选择报告" in labels
     assert "通知类型" in labels
     assert "通知目标（可选）" in labels
+    assert "企业微信通知" in str(config)
+    assert "企业微信机器人" not in str(config)
+    assert "通用 Webhook" not in str(config)
+    notification_type_component = next(
+        component
+        for component in config["components"]
+        if component.get("props", {}).get("label") == "通知类型"
+    )
+    assert "webhook" not in str(notification_type_component["props"]["choices"])
     assert "通知通道名称（可选）" not in labels
     assert "生成后发送通知" in labels
     assert "查询" in str(config)
@@ -109,6 +124,12 @@ def test_build_gradio_app_contains_core_ui_labels():
     assert "page-level" not in str(config)
     assert "按订阅间隔抓取" not in str(config)
     assert "刷新报告" not in str(config)
+    assert "勾选要删除的报告" in labels
+    assert "删除选中报告" in str(config)
+    assert "修改密码" in str(config)
+    assert "退出登录" in str(config)
+    assert "/api/auth/change-password" in str(config)
+    assert "/api/auth/logout" in str(config)
 
 
 def test_build_gradio_app_defaults_report_dates_to_one_week_range():
@@ -211,6 +232,11 @@ def test_notification_channels_from_ui_requires_complete_channel_fields():
 def test_notification_channels_from_ui_rejects_smtp_target_that_is_not_email():
     with pytest.raises(ValueError, match="SMTP 通知目标必须是邮箱地址"):
         _notification_channels_from_ui("smtp", "not-an-email")
+
+
+def test_notification_channels_from_ui_rejects_webhook_channel_from_subscription_form():
+    with pytest.raises(ValueError, match="仓库订阅页面暂不支持该通知类型"):
+        _notification_channels_from_ui("webhook", "release-bot")
 
 
 def test_format_subscription_rows_adds_delete_action_column():
@@ -317,7 +343,12 @@ def test_subscription_edit_form_updates_backfill_readonly_repository_fields():
     assert updates["delete_button"]["visible"] is True
 
 
-async def test_load_reports_for_ui_requires_custom_date_range():
+async def test_load_reports_for_ui_requires_custom_date_range(monkeypatch):
+    async def fake_current_user_id(_request):
+        return 1
+
+    monkeypatch.setattr(gradio_app, "_current_user_id_from_request", fake_current_user_id)
+
     report_select, generated_at, preview, status = await load_reports_for_ui(1, "custom", None, None)
 
     assert report_select["choices"] == []
@@ -326,7 +357,12 @@ async def test_load_reports_for_ui_requires_custom_date_range():
     assert status == "请选择报告列表范围的开始日期和结束日期。"
 
 
-async def test_load_report_content_for_ui_treats_empty_report_id_as_unselected():
+async def test_load_report_content_for_ui_treats_empty_report_id_as_unselected(monkeypatch):
+    async def fake_current_user_id(_request):
+        return 1
+
+    monkeypatch.setattr(gradio_app, "_current_user_id_from_request", fake_current_user_id)
+
     generated_at, preview = await load_report_content_for_ui("", 1)
 
     assert generated_at == "报告生成时间：未选择报告"
@@ -349,3 +385,88 @@ def test_format_report_choices_uses_report_name_and_generated_time():
     assert format_report_choices(reports) == [
         ("sentinel（2026-06-01~2026-06-03）", 7),
     ]
+
+
+def test_format_report_management_choices_includes_id_repo_period_and_generated_time():
+    reports = [
+        Report(
+            id=7,
+            subscription_id=1,
+            name="acme_sentinel_2026-06-01",
+            content_markdown="# report",
+            generated_at=datetime(2026, 6, 1, 9, 30),
+            period_start_date=date(2026, 6, 1),
+            period_end_date=date(2026, 6, 3),
+        ),
+    ]
+
+    assert format_report_management_choices(reports) == [
+        ("#7 sentinel（2026-06-01~2026-06-03） - 2026-06-01 09:30:00", 7),
+    ]
+
+
+async def test_refresh_subscriptions_for_ui_uses_current_user(monkeypatch):
+    seen = {}
+
+    async def fake_current_user_id(_request):
+        return 2
+
+    async def fake_list_subscriptions(user_id):
+        seen["user_id"] = user_id
+        return []
+
+    monkeypatch.setattr(gradio_app, "_current_user_id_from_request", fake_current_user_id)
+    monkeypatch.setattr(gradio_app, "_list_subscriptions", fake_list_subscriptions)
+
+    status, rows, choices = await gradio_app.refresh_subscriptions_for_ui(object())
+
+    assert seen["user_id"] == 2
+    assert status == "当前共有 0 个订阅。"
+    assert rows == []
+    assert choices["choices"] == []
+
+
+async def test_refresh_report_management_for_ui_uses_current_user(monkeypatch):
+    seen = {}
+
+    async def fake_current_user_id(_request):
+        return 2
+
+    async def fake_list_reports(*, user_id):
+        seen["user_id"] = user_id
+        return []
+
+    monkeypatch.setattr(gradio_app, "_current_user_id_from_request", fake_current_user_id)
+    monkeypatch.setattr(gradio_app, "_list_reports", fake_list_reports)
+
+    status, choices = await gradio_app.refresh_report_management_for_ui(object())
+
+    assert seen["user_id"] == 2
+    assert status == "当前共有 0 份报告。"
+    assert choices["choices"] == []
+
+
+async def test_delete_reports_from_ui_deletes_only_current_user_reports(monkeypatch):
+    seen = {}
+
+    async def fake_current_user_id(_request):
+        return 2
+
+    async def fake_batch_delete_reports(_session, report_ids, user_id):
+        seen["report_ids"] = report_ids
+        seen["user_id"] = user_id
+        return 1, []
+
+    async def fake_list_reports(*, user_id):
+        seen["list_user_id"] = user_id
+        return []
+
+    monkeypatch.setattr(gradio_app, "_current_user_id_from_request", fake_current_user_id)
+    monkeypatch.setattr(gradio_app, "batch_delete_reports", fake_batch_delete_reports)
+    monkeypatch.setattr(gradio_app, "_list_reports", fake_list_reports)
+
+    status, choices = await gradio_app.delete_reports_from_ui([7], object())
+
+    assert seen == {"report_ids": [7], "user_id": 2, "list_user_id": 2}
+    assert status == "已删除 1 份报告。"
+    assert choices["choices"] == []

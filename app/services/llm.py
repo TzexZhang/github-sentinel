@@ -5,7 +5,7 @@ from typing import Any, Protocol
 import httpx
 
 REPORT_SYSTEM_PROMPT = (
-    "你是 GitHub Sentinel 的项目进展简报助手，负责把仓库事件整理成清晰、克制、"
+    "你是 Git Sentinel 的项目进展简报助手，负责把仓库事件整理成清晰、克制、"
     "可直接保存的中文 Markdown 报告。输出必须只包含 Markdown 正文，不要输出代码块围栏、"
     "不要解释你的思考过程、不要编造事件列表中没有的信息。报告语气要像项目管理简报："
     "先给结论，再按新增功能、主要改进、修复问题分类总结；无法归类或没有证据的栏目写"

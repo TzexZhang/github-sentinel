@@ -40,11 +40,13 @@ class NotificationWorker:
         session_factory: async_sessionmaker[AsyncSession],
         notification_sender: NotificationJobSender,
         tick_seconds: int = 30,
+        batch_size: int = 50,
         now_provider: Callable[[], datetime] | None = None,
     ) -> None:
         self._session_factory = session_factory
         self._notification_sender = notification_sender
         self._tick_seconds = tick_seconds
+        self._batch_size = batch_size
         self._now_provider = now_provider or _utc_now
         self._task: asyncio.Task[None] | None = None
         self._stop_event = asyncio.Event()
@@ -84,7 +86,7 @@ class NotificationWorker:
                     await self._notification_sender.send(
                         job.notification_channel,
                         job.subject,
-                        job.body_markdown,
+                        job.report.content_markdown,
                     )
                     job.status = "sent"
                     job.sent_at = now
@@ -121,12 +123,16 @@ class NotificationWorker:
     ) -> list[NotificationJob]:
         result = await session.execute(
             select(NotificationJob)
-            .options(selectinload(NotificationJob.notification_channel))
+            .options(
+                selectinload(NotificationJob.notification_channel),
+                selectinload(NotificationJob.report),
+            )
             .where(
                 NotificationJob.status == "pending",
                 NotificationJob.next_attempt_at <= now,
             )
-            .order_by(NotificationJob.id),
+            .order_by(NotificationJob.id)
+            .limit(self._batch_size),
         )
         return list(result.scalars().all())
 

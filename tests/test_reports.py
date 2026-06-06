@@ -9,6 +9,8 @@ from app.db.base import Base
 from app.db.models import Report, Subscription
 from app.db.session import get_session
 from app.main import create_app
+from app.repositories.reports import list_reports
+from app.repositories.users import ensure_default_admin
 
 
 async def test_list_subscription_reports_returns_selected_repository_markdown_reports():
@@ -20,6 +22,7 @@ async def test_list_subscription_reports_returns_selected_repository_markdown_re
 
     async with session_factory() as session:
         first = Subscription(
+            user_id=1,
             platform="github",
             owner="acme",
             repo="sentinel",
@@ -27,6 +30,7 @@ async def test_list_subscription_reports_returns_selected_repository_markdown_re
             interval_seconds=60,
         )
         second = Subscription(
+            user_id=1,
             platform="github",
             owner="acme",
             repo="other",
@@ -55,6 +59,7 @@ async def test_list_subscription_reports_returns_selected_repository_markdown_re
         )
         await session.commit()
         first_id = first.id
+        await ensure_default_admin(session, "admin", "admin123")
 
     async def override_get_session() -> AsyncIterator[AsyncSession]:
         async with session_factory() as session:
@@ -65,6 +70,11 @@ async def test_list_subscription_reports_returns_selected_repository_markdown_re
 
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+        login_response = await client.post(
+            "/api/auth/login",
+            json={"username": "admin", "password": "admin123"},
+        )
+        assert login_response.status_code == 200
         response = await client.get(f"/api/subscriptions/{first_id}/reports")
 
     assert response.status_code == 200
@@ -81,5 +91,45 @@ async def test_list_subscription_reports_returns_selected_repository_markdown_re
             "content_markdown": "# sentinel",
         },
     ]
+
+    await engine.dispose()
+
+
+async def test_list_reports_orders_recent_generated_reports_first():
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:", future=True)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+
+    async with session_factory() as session:
+        subscription = Subscription(
+            user_id=1,
+            platform="github",
+            owner="acme",
+            repo="sentinel",
+            repository_url="https://github.com/acme/sentinel",
+            interval_seconds=60,
+        )
+        session.add(subscription)
+        await session.flush()
+        older = Report(
+            subscription_id=subscription.id,
+            name="older",
+            content_markdown="# older",
+            generated_at=datetime(2026, 6, 1, tzinfo=timezone.utc),
+        )
+        newer = Report(
+            subscription_id=subscription.id,
+            name="newer",
+            content_markdown="# newer",
+            generated_at=datetime(2026, 6, 2, tzinfo=timezone.utc),
+        )
+        session.add_all([older, newer])
+        await session.commit()
+
+        reports = await list_reports(session, user_id=1)
+
+    assert [report.name for report in reports] == ["newer", "older"]
 
     await engine.dispose()

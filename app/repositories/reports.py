@@ -2,11 +2,11 @@
 
 from datetime import date, datetime
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.db.models import Report
+from app.db.models import NotificationJob, Report, Subscription
 
 
 async def get_report_by_period(
@@ -69,11 +69,14 @@ async def create_report(
 async def list_reports(
     session: AsyncSession,
     subscription_id: int | None = None,
+    user_id: int | None = None,
     generated_since: datetime | None = None,
     generated_before: datetime | None = None,
 ) -> list[Report]:
     """按时间倒序查询报告，可按订阅和生成时间过滤。"""
     statement = select(Report).options(selectinload(Report.subscription))
+    if user_id is not None:
+        statement = statement.join(Subscription).where(Subscription.user_id == user_id)
     if subscription_id is not None:
         statement = statement.where(Report.subscription_id == subscription_id)
     if generated_since is not None:
@@ -82,3 +85,24 @@ async def list_reports(
         statement = statement.where(Report.generated_at < generated_before)
     result = await session.execute(statement.order_by(Report.generated_at.desc(), Report.id.desc()))
     return list(result.scalars().all())
+
+
+async def batch_delete_reports(
+    session: AsyncSession,
+    report_ids: list[int],
+    user_id: int,
+) -> tuple[int, list[int]]:
+    """物理删除当前用户拥有的报告及其通知任务。"""
+    unique_ids = list(dict.fromkeys(report_ids))
+    result = await session.execute(
+        select(Report.id)
+        .join(Subscription)
+        .where(Report.id.in_(unique_ids), Subscription.user_id == user_id),
+    )
+    owned_ids = set(result.scalars().all())
+    if owned_ids:
+        await session.execute(delete(NotificationJob).where(NotificationJob.report_id.in_(owned_ids)))
+        await session.execute(delete(Report).where(Report.id.in_(owned_ids)))
+        await session.commit()
+    not_found_ids = [report_id for report_id in unique_ids if report_id not in owned_ids]
+    return len(owned_ids), not_found_ids

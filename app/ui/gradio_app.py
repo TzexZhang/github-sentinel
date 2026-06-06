@@ -5,13 +5,16 @@ from datetime import date, datetime, timedelta
 import gradio as gr
 
 from app.api.deps import build_sentinel_agent
+from app.core.config import settings
 from app.core.errors import ApiError
 from app.db.models import Report, Subscription
 from app.db.session import AsyncSessionLocal
-from app.repositories.reports import list_reports
+from app.repositories.reports import batch_delete_reports, list_reports
+from app.repositories.users import get_user_by_session_token
 from app.repositories.subscriptions import (
     create_subscription,
     delete_subscription,
+    get_subscription,
     list_subscriptions,
     update_subscription,
 )
@@ -267,6 +270,7 @@ const REPORT_MONTHS = {
 };
 const REPORT_WEEKDAYS = {Su: "日", Mo: "一", Tu: "二", We: "三", Th: "四", Fr: "五", Sa: "六"};
 const REPORT_DATE_ACTIONS = {Clear: "清除", Now: "今天", Done: "完成"};
+const RUNTIME_INSTANCE_STORAGE_KEY = "git-sentinel-runtime-instance-id";
 
 function localizeReportCalendars() {
     document.querySelectorAll("*").forEach((node) => {
@@ -313,24 +317,171 @@ function refreshReportDatePanels() {
     localizeReportCalendars();
 }
 
+async function refreshPageAfterBackendReload() {
+    try {
+        const response = await fetch("/api/runtime", {cache: "no-store"});
+        if (!response.ok) return;
+        const payload = await response.json();
+        const instanceId = payload.instance_id;
+        if (!instanceId) return;
+        const storedInstanceId = sessionStorage.getItem(RUNTIME_INSTANCE_STORAGE_KEY);
+        if (!storedInstanceId) {
+            sessionStorage.setItem(RUNTIME_INSTANCE_STORAGE_KEY, instanceId);
+            return;
+        }
+        if (storedInstanceId !== instanceId) {
+            sessionStorage.setItem(RUNTIME_INSTANCE_STORAGE_KEY, instanceId);
+            window.location.reload();
+        }
+    } catch {
+        // 服务热重载过程中会短暂不可用，下一轮轮询成功后再刷新页面。
+    }
+}
+
+async function postJson(url, payload) {
+    const response = await fetch(url, {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify(payload),
+    });
+    let data = {};
+    try {
+        data = await response.json();
+    } catch {
+        data = {};
+    }
+    if (!response.ok) {
+        throw new Error(data.data?.message || "请求失败。");
+    }
+    return data;
+}
+
+function bindUserManagementPanel() {
+    const root = document.getElementById("user-management-panel");
+    if (!root || root.dataset.bound === "true") return;
+    root.dataset.bound = "true";
+    const userInfo = root.querySelector("[data-user-info]");
+    const status = root.querySelector("[data-user-status]");
+    const oldPassword = root.querySelector("[data-old-password]");
+    const newPassword = root.querySelector("[data-new-password]");
+    const confirmPassword = root.querySelector("[data-confirm-password]");
+    fetch("/api/auth/me")
+        .then((response) => response.ok ? response.json() : null)
+        .then((payload) => {
+            if (payload?.data?.username) {
+                userInfo.textContent = `当前用户：${payload.data.username}`;
+            }
+        })
+        .catch(() => {});
+    root.querySelector("[data-change-password]").addEventListener("click", async () => {
+        status.textContent = "";
+        status.className = "user-management-status";
+        if (newPassword.value !== confirmPassword.value) {
+            status.textContent = "两次输入的新密码不一致。";
+            return;
+        }
+        try {
+            await postJson("/api/auth/change-password", {
+                old_password: oldPassword.value,
+                new_password: newPassword.value,
+            });
+            oldPassword.value = "";
+            newPassword.value = "";
+            confirmPassword.value = "";
+            status.className = "user-management-status success";
+            status.textContent = "密码修改成功。";
+        } catch (error) {
+            status.textContent = error.message || "密码修改失败。";
+        }
+    });
+    root.querySelector("[data-logout]").addEventListener("click", async () => {
+        await fetch("/api/auth/logout", {method: "POST"});
+        window.location.href = "/login";
+    });
+}
+
 new MutationObserver(refreshReportDatePanels).observe(document.documentElement, {
     childList: true,
     subtree: true,
     characterData: true,
 });
 window.addEventListener("load", refreshReportDatePanels);
+window.addEventListener("load", refreshPageAfterBackendReload);
+window.addEventListener("load", bindUserManagementPanel);
+window.addEventListener("click", () => setTimeout(bindUserManagementPanel, 0));
 window.addEventListener("resize", refreshReportDatePanels);
 window.addEventListener("click", () => setTimeout(refreshReportDatePanels, 0));
+window.setInterval(refreshPageAfterBackendReload, 1500);
 </script>
+"""
+
+USER_MANAGEMENT_HTML = """
+<style>
+.user-management-panel {
+    border: 1px solid #dde5df;
+    border-radius: 8px;
+    background: #fbfcfa;
+    padding: 16px;
+    max-width: 520px;
+}
+.user-management-panel label {
+    display: grid;
+    gap: 6px;
+    margin-bottom: 12px;
+}
+.user-management-panel input {
+    min-height: 38px;
+    border: 1px solid #d7ded9;
+    border-radius: 6px;
+    padding: 8px 10px;
+}
+.user-management-actions {
+    display: flex;
+    gap: 10px;
+    margin-top: 8px;
+}
+.user-management-actions button {
+    min-height: 38px;
+    border: 1px solid #2f6b4f;
+    border-radius: 6px;
+    padding: 0 14px;
+    background: #2f6b4f;
+    color: #fff;
+    cursor: pointer;
+}
+.user-management-actions button.secondary {
+    background: #fff;
+    color: #2f6b4f;
+}
+.user-management-status {
+    min-height: 22px;
+    margin-top: 12px;
+    color: #8f1d1d;
+}
+.user-management-status.success {
+    color: #187b58;
+}
+</style>
+<div class="user-management-panel" id="user-management-panel">
+  <p data-user-info>当前用户：加载中...</p>
+  <label>当前密码<input data-old-password type="password" autocomplete="current-password"></label>
+  <label>新密码（6-12 位）<input data-new-password type="password" minlength="6" maxlength="12" autocomplete="new-password"></label>
+  <label>确认新密码<input data-confirm-password type="password" minlength="6" maxlength="12" autocomplete="new-password"></label>
+  <div class="user-management-actions">
+    <button type="button" data-change-password>修改密码</button>
+    <button type="button" class="secondary" data-logout>退出登录</button>
+  </div>
+  <div class="user-management-status" data-user-status></div>
+</div>
 """
 
 
 def build_gradio_app() -> gr.Blocks:
-    """构建 GitHub Sentinel 的 Gradio 可视化界面。"""
+    """构建 Git Sentinel 的 Gradio 可视化界面。"""
     default_start_date, default_end_date = default_week_date_range()
-    with gr.Blocks(title="GitHub Sentinel Dashboard", fill_height=True) as ui:
+    with gr.Blocks(title="Git Sentinel Dashboard", fill_height=True) as ui:
         gr.HTML("", head=REPORT_PREVIEW_HEAD)
-        gr.Markdown("# GitHub Sentinel Dashboard")
+        gr.Markdown("# Git Sentinel Dashboard")
         editing_subscription_id = gr.State(None)
 
         with gr.Tab("订阅仓库"):
@@ -344,14 +495,13 @@ def build_gradio_app() -> gr.Blocks:
                     choices=[
                         ("不通知", ""),
                         ("邮箱 SMTP", "smtp"),
-                        ("企业微信机器人", "wecom"),
-                        ("通用 Webhook", "webhook"),
+                        ("企业微信通知", "wecom"),
                     ],
                     value="smtp",
                 )
             notification_channel_target = gr.Textbox(
                 label="通知目标（可选）",
-                placeholder="邮箱填写收件人地址；企业微信/Webhook 填目标标识",
+                placeholder="邮箱填写收件人地址；企业微信填写成员账号或目标标识",
             )
             with gr.Row():
                 create_button = gr.Button("创建订阅", variant="primary")
@@ -470,6 +620,22 @@ def build_gradio_app() -> gr.Blocks:
                         elem_classes=["report-preview"],
                     )
 
+        with gr.Tab("报告管理"):
+            gr.Markdown("## 报告管理")
+            report_management_status = gr.Markdown()
+            report_management_choices = gr.CheckboxGroup(
+                label="勾选要删除的报告",
+                choices=[],
+                interactive=True,
+            )
+            with gr.Row():
+                refresh_report_management_button = gr.Button("刷新管理列表")
+                delete_reports_button = gr.Button("删除选中报告", variant="stop")
+
+        with gr.Tab("用户管理"):
+            gr.Markdown("## 用户管理")
+            gr.HTML(USER_MANAGEMENT_HTML)
+
         ui.load(
             refresh_subscriptions_for_ui,
             outputs=[
@@ -477,6 +643,12 @@ def build_gradio_app() -> gr.Blocks:
                 subscriptions_table,
                 subscription_select,
             ],
+            queue=False,
+        )
+        ui.load(
+            refresh_report_management_for_ui,
+            outputs=[report_management_status, report_management_choices],
+            queue=False,
         )
         refresh_button.click(
             refresh_subscriptions_for_ui,
@@ -485,6 +657,7 @@ def build_gradio_app() -> gr.Blocks:
                 subscriptions_table,
                 subscription_select,
             ],
+            queue=False,
         )
         subscription_form_outputs = [
             repository_url,
@@ -512,6 +685,7 @@ def build_gradio_app() -> gr.Blocks:
                 subscription_select,
                 *subscription_form_outputs,
             ],
+            queue=False,
         )
         subscriptions_table.select(
             handle_subscription_table_action,
@@ -525,6 +699,7 @@ def build_gradio_app() -> gr.Blocks:
                 report_markdown,
                 *subscription_form_outputs,
             ],
+            queue=False,
         )
         update_button.click(
             update_subscription_from_ui,
@@ -540,6 +715,7 @@ def build_gradio_app() -> gr.Blocks:
                 subscription_select,
                 *subscription_form_outputs,
             ],
+            queue=False,
         )
         delete_button.click(
             delete_subscription_from_ui,
@@ -553,6 +729,7 @@ def build_gradio_app() -> gr.Blocks:
                 report_markdown,
                 *subscription_form_outputs,
             ],
+            queue=False,
         )
         generate_button.click(
             generate_report_from_ui,
@@ -563,38 +740,97 @@ def build_gradio_app() -> gr.Blocks:
                 send_notification_after_generate,
             ],
             outputs=[operation_status, report_select, report_generated_at, report_markdown],
+            queue=False,
         )
         query_reports_button.click(
             load_reports_for_ui,
             inputs=[subscription_select, report_window, query_start_date, query_end_date],
             outputs=[report_select, report_generated_at, report_markdown, operation_status],
+            queue=False,
         )
         subscription_select.change(
             load_reports_for_ui,
             inputs=[subscription_select, report_window, query_start_date, query_end_date],
             outputs=[report_select, report_generated_at, report_markdown, operation_status],
+            queue=False,
         )
         report_window.change(
             toggle_custom_report_window,
             inputs=[report_window],
             outputs=[query_date_row],
+            queue=False,
         )
         report_select.change(
             load_report_content_for_ui,
             inputs=[report_select, subscription_select],
             outputs=[report_generated_at, report_markdown],
+            queue=False,
+        )
+        refresh_report_management_button.click(
+            refresh_report_management_for_ui,
+            outputs=[report_management_status, report_management_choices],
+            queue=False,
+        )
+        delete_reports_button.click(
+            delete_reports_from_ui,
+            inputs=[report_management_choices],
+            outputs=[report_management_status, report_management_choices],
+            queue=False,
         )
 
     return ui
 
 
-async def refresh_subscriptions_for_ui():
+async def refresh_subscriptions_for_ui(request: gr.Request):
     """刷新订阅列表和订阅选择器。"""
-    subscriptions = await _list_subscriptions()
+    user_id = await _current_user_id_from_request(request)
+    if user_id is None:
+        return (
+            "请重新登录后查看订阅。",
+            [],
+            gr.update(choices=[], value=None),
+        )
+    subscriptions = await _list_subscriptions(user_id)
     return (
         f"当前共有 {len(subscriptions)} 个订阅。",
         format_subscription_rows(subscriptions),
         gr.update(choices=format_subscription_choices(subscriptions), value=None),
+    )
+
+
+async def refresh_report_management_for_ui(request: gr.Request):
+    """刷新报告管理列表。"""
+    user_id = await _current_user_id_from_request(request)
+    if user_id is None:
+        return "请重新登录后查看报告。", gr.update(choices=[], value=[])
+    reports = await _list_reports(user_id=user_id)
+    return (
+        f"当前共有 {len(reports)} 份报告。",
+        gr.update(choices=format_report_management_choices(reports), value=[]),
+    )
+
+
+async def delete_reports_from_ui(report_ids: list[int | str] | None, request: gr.Request):
+    """批量物理删除用户勾选的报告。"""
+    user_id = await _current_user_id_from_request(request)
+    if user_id is None:
+        return "请重新登录后删除报告。", gr.update(choices=[], value=[])
+    selected_ids = [int(report_id) for report_id in (report_ids or [])]
+    if not selected_ids:
+        reports = await _list_reports(user_id=user_id)
+        return (
+            "请先勾选要删除的报告。",
+            gr.update(choices=format_report_management_choices(reports), value=[]),
+        )
+    async with AsyncSessionLocal() as session:
+        deleted_count, not_found_ids = await batch_delete_reports(session, selected_ids, user_id=user_id)
+    reports = await _list_reports(user_id=user_id)
+    status = f"已删除 {deleted_count} 份报告。"
+    if not_found_ids:
+        status = f"{status} 未找到或无权限删除：{', '.join(str(report_id) for report_id in not_found_ids)}。"
+    return (
+        status,
+        gr.update(choices=format_report_management_choices(reports), value=[]),
     )
 
 
@@ -604,8 +840,17 @@ async def create_subscription_from_ui(
     interval_seconds: int | float | None,
     notification_channel_type: str | None,
     notification_channel_target: str | None,
+    request: gr.Request,
 ):
     """根据页面输入创建订阅。"""
+    user_id = await _current_user_id_from_request(request)
+    if user_id is None:
+        return (
+            "请重新登录后创建订阅。",
+            [],
+            gr.update(choices=[], value=None),
+            *_subscription_form_output_values(_subscription_form_noop_updates()),
+        )
     try:
         payload = SubscriptionCreate(
             repository_url=repository_url,
@@ -617,8 +862,8 @@ async def create_subscription_from_ui(
             ),
         )
         async with AsyncSessionLocal() as session:
-            await create_subscription(session, payload)
-        subscriptions = await _list_subscriptions()
+            await create_subscription(session, payload, user_id=user_id)
+        subscriptions = await _list_subscriptions(user_id)
         return (
             "订阅创建成功。",
             format_subscription_rows(subscriptions),
@@ -626,7 +871,7 @@ async def create_subscription_from_ui(
             *_subscription_form_output_values(_empty_subscription_form_updates()),
         )
     except (ApiError, ValueError) as exc:
-        subscriptions = await _list_subscriptions()
+        subscriptions = await _list_subscriptions(user_id)
         return (
             _error_message(exc),
             format_subscription_rows(subscriptions),
@@ -640,10 +885,19 @@ async def update_subscription_from_ui(
     interval_seconds: int | float | None,
     notification_channel_type: str | None,
     notification_channel_target: str | None,
+    request: gr.Request,
 ):
     """根据页面输入更新订阅间隔和通知配置。"""
+    user_id = await _current_user_id_from_request(request)
+    if user_id is None:
+        return (
+            "请重新登录后修改订阅。",
+            [],
+            gr.update(choices=[], value=None),
+            *_subscription_form_output_values(_subscription_form_noop_updates()),
+        )
     if subscription_id is None:
-        subscriptions = await _list_subscriptions()
+        subscriptions = await _list_subscriptions(user_id)
         return (
             "请先在订阅列表点击“修改”。",
             format_subscription_rows(subscriptions),
@@ -659,8 +913,8 @@ async def update_subscription_from_ui(
             ),
         )
         async with AsyncSessionLocal() as session:
-            await update_subscription(session, int(subscription_id), payload)
-        subscriptions = await _list_subscriptions()
+            await update_subscription(session, int(subscription_id), payload, user_id=user_id)
+        subscriptions = await _list_subscriptions(user_id)
         return (
             "订阅修改成功。",
             format_subscription_rows(subscriptions),
@@ -668,7 +922,7 @@ async def update_subscription_from_ui(
             *_subscription_form_output_values(_empty_subscription_form_updates()),
         )
     except (ApiError, ValueError) as exc:
-        subscriptions = await _list_subscriptions()
+        subscriptions = await _list_subscriptions(user_id)
         return (
             _error_message(exc),
             format_subscription_rows(subscriptions),
@@ -682,8 +936,17 @@ async def generate_report_from_ui(
     start_date: str | datetime | date | None,
     end_date: str | datetime | date | None,
     send_notification: bool | None = False,
+    request: gr.Request | None = None,
 ):
     """按页面选择的日期范围生成报告。"""
+    user_id = await _current_user_id_from_request(request)
+    if user_id is None:
+        return (
+            "请重新登录后生成报告。",
+            gr.update(choices=[], value=None),
+            "报告生成时间：未选择报告",
+            "请选择左侧报告后查看内容。",
+        )
     if subscription_id is None:
         return (
             "请先选择订阅仓库。",
@@ -699,6 +962,8 @@ async def generate_report_from_ui(
         if parsed_end < parsed_start:
             raise ValueError("结束日期必须大于或等于开始日期。")
         async with AsyncSessionLocal() as session:
+            if await get_subscription(session, int(subscription_id), user_id=user_id) is None:
+                raise ApiError(status_code=404, code="subscription_not_found", message="订阅不存在。")
             result, report = await build_sentinel_agent().generate_report_for_date_range(
                 session,
                 int(subscription_id),
@@ -706,7 +971,7 @@ async def generate_report_from_ui(
                 parsed_end,
                 send_notification=bool(send_notification),
             )
-        reports = await _list_reports(int(subscription_id))
+        reports = await _list_reports(int(subscription_id), user_id=user_id)
         status = f"报告生成成功：{report.name}"
         if send_notification:
             status = (
@@ -721,7 +986,7 @@ async def generate_report_from_ui(
             report.content_markdown,
         )
     except (ApiError, ValueError) as exc:
-        reports = await _list_reports(int(subscription_id))
+        reports = await _list_reports(int(subscription_id), user_id=user_id)
         return (
             _error_message(exc),
             gr.update(choices=format_report_choices(reports), value=None),
@@ -735,8 +1000,17 @@ async def load_reports_for_ui(
     report_window: str | None,
     start_date: str | datetime | date | None,
     end_date: str | datetime | date | None,
+    request: gr.Request | None = None,
 ):
     """加载指定订阅绑定的报告。"""
+    user_id = await _current_user_id_from_request(request)
+    if user_id is None:
+        return (
+            gr.update(choices=[], value=None),
+            "报告生成时间：未选择报告",
+            "请选择左侧报告后查看内容。",
+            "请重新登录后查看报告。",
+        )
     if subscription_id is None:
         return (
             gr.update(choices=[], value=None),
@@ -755,6 +1029,7 @@ async def load_reports_for_ui(
         )
     reports = await _list_reports(
         int(subscription_id),
+        user_id=user_id,
         generated_since=generated_since,
         generated_before=generated_before,
     )
@@ -769,21 +1044,40 @@ async def load_reports_for_ui(
 async def load_report_content_for_ui(
     report_id: int | str | None,
     subscription_id: int | str | None,
+    request: gr.Request | None = None,
 ) -> tuple[str, str]:
     """加载选中的 Markdown 报告正文。"""
+    user_id = await _current_user_id_from_request(request)
+    if user_id is None:
+        return "报告生成时间：未选择报告", "请重新登录后查看报告。"
     if report_id in (None, "") or subscription_id in (None, ""):
         return "报告生成时间：未选择报告", "请选择左侧报告后查看内容。"
     selected_report_id = int(report_id)
-    reports = await _list_reports(int(subscription_id))
+    reports = await _list_reports(int(subscription_id), user_id=user_id)
     for report in reports:
         if report.id == selected_report_id:
             return _format_report_generated_at(report), report.content_markdown
     return "报告生成时间：未选择报告", "请选择左侧报告后查看内容。"
 
 
-async def handle_subscription_table_action(rows: list[list[object]] | None, evt: gr.SelectData):
+async def handle_subscription_table_action(
+    rows: list[list[object]] | None,
+    evt: gr.SelectData,
+    request: gr.Request,
+):
     """处理订阅列表中的操作列点击。"""
-    subscriptions = await _list_subscriptions()
+    user_id = await _current_user_id_from_request(request)
+    if user_id is None:
+        return (
+            "请重新登录后修改订阅。",
+            [],
+            gr.update(choices=[], value=None),
+            gr.update(),
+            gr.update(),
+            gr.update(),
+            *_subscription_form_output_values(_subscription_form_noop_updates()),
+        )
+    subscriptions = await _list_subscriptions(user_id)
 
     edit_subscription_id = _selected_edit_subscription_id(rows, evt)
     if edit_subscription_id is not None:
@@ -819,12 +1113,23 @@ async def handle_subscription_table_action(rows: list[list[object]] | None, evt:
     )
 
 
-async def delete_subscription_from_ui(subscription_id: int | None):
+async def delete_subscription_from_ui(subscription_id: int | None, request: gr.Request):
     """删除当前选中的订阅并刷新页面数据。"""
+    user_id = await _current_user_id_from_request(request)
+    if user_id is None:
+        return (
+            "请重新登录后删除订阅。",
+            [],
+            gr.update(choices=[], value=None),
+            gr.update(choices=[], value=None),
+            "报告生成时间：未选择报告",
+            "请选择左侧报告后查看内容。",
+            *_subscription_form_output_values(_subscription_form_noop_updates()),
+        )
     if subscription_id is not None:
         async with AsyncSessionLocal() as session:
-            await delete_subscription(session, int(subscription_id))
-    subscriptions = await _list_subscriptions()
+            await delete_subscription(session, int(subscription_id), user_id=user_id)
+    subscriptions = await _list_subscriptions(user_id)
     return (
         "订阅已删除。" if subscription_id is not None else "请先选择订阅仓库。",
         format_subscription_rows(subscriptions),
@@ -872,6 +1177,18 @@ def format_report_choices(reports: list[Report]) -> list[tuple[str, int]]:
     ]
 
 
+def format_report_management_choices(reports: list[Report]) -> list[tuple[str, int]]:
+    """格式化报告管理复选项。"""
+    return [
+        (
+            f"#{report.id} {_report_repo_name(report)}（{_report_period_label(report)}）"
+            f" - {format_report_datetime(report.generated_at)}",
+            report.id,
+        )
+        for report in reports
+    ]
+
+
 def format_subscription_rows(subscriptions: list[Subscription]) -> list[list[object]]:
     """格式化订阅表格行。"""
     return [
@@ -895,13 +1212,25 @@ def toggle_custom_report_window(report_window: str | None):
     return gr.update(visible=report_window == "custom")
 
 
-async def _list_subscriptions() -> list[Subscription]:
+async def _current_user_id_from_request(request: gr.Request | None) -> int | None:
+    if request is None:
+        return None
+    token = dict(getattr(request, "cookies", {})).get(settings.auth_cookie_name)
+    if not token:
+        return None
     async with AsyncSessionLocal() as session:
-        return await list_subscriptions(session)
+        user = await get_user_by_session_token(session, token)
+        return user.id if user is not None else None
+
+
+async def _list_subscriptions(user_id: int) -> list[Subscription]:
+    async with AsyncSessionLocal() as session:
+        return await list_subscriptions(session, user_id=user_id)
 
 
 async def _list_reports(
-    subscription_id: int,
+    subscription_id: int | None = None,
+    user_id: int | None = None,
     generated_since: datetime | None = None,
     generated_before: datetime | None = None,
 ) -> list[Report]:
@@ -909,6 +1238,7 @@ async def _list_reports(
         return await list_reports(
             session,
             subscription_id=subscription_id,
+            user_id=user_id,
             generated_since=generated_since,
             generated_before=generated_before,
         )
@@ -977,6 +1307,8 @@ def _notification_channels_from_ui(
         return []
     if normalized_type is None or normalized_target is None:
         raise ValueError("通知类型和通知目标需要同时填写。")
+    if normalized_type not in {"smtp", "wecom"}:
+        raise ValueError("仓库订阅页面暂不支持该通知类型。")
     validate_notification_channel_target(normalized_type, normalized_target)
     return [
         {

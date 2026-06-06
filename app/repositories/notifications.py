@@ -34,7 +34,6 @@ async def create_notification_jobs_for_report(
             report_id=report.id,
             notification_channel_id=binding.notification_channel_id,
             subject=report.name,
-            body_markdown=report.content_markdown,
             dedupe_key=dedupe_key,
         )
         session.add(job)

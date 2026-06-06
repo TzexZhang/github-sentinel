@@ -43,3 +43,17 @@ class ReportRead(ReportListItem):
     """完整报告响应，包含 Markdown 正文。"""
 
     content_markdown: str = Field(min_length=1)
+
+
+class ReportBatchDeleteRequest(BaseModel):
+    """批量物理删除已生成报告的请求结构。"""
+
+    report_ids: list[int] = Field(min_length=1, max_length=100)
+
+
+class ReportBatchDeleteResult(BaseModel):
+    """批量删除结果，不暴露其他用户的报告归属。"""
+
+    requested_count: int
+    deleted_count: int
+    not_found_ids: list[int] = Field(default_factory=list)

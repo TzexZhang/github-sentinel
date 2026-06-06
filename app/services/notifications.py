@@ -191,6 +191,33 @@ def _render_inline_markdown_as_text(value: str) -> str:
     return value
 
 
+def _build_wecom_text_chunks(subject: str, body_markdown: str, max_chars: int) -> list[str]:
+    body_text = _markdown_to_text(body_markdown)
+    content = f"{subject}\n\n{body_text}".strip()
+    if len(content) <= max_chars:
+        return [content]
+
+    chunks: list[str] = []
+    current = ""
+    for block in content.splitlines():
+        separator = "\n" if current else ""
+        candidate = f"{current}{separator}{block}" if block else f"{current}\n"
+        if len(candidate) <= max_chars:
+            current = candidate
+            continue
+        if current.strip():
+            chunks.append(current.strip())
+            current = ""
+        if len(block) <= max_chars:
+            current = block
+            continue
+        for start in range(0, len(block), max_chars):
+            chunks.append(block[start : start + max_chars])
+    if current.strip():
+        chunks.append(current.strip())
+    return chunks or [subject]
+
+
 class WeComNotificationSender:
     """通过企业微信自建应用向成员账号发送文本通知。"""
 
@@ -200,6 +227,7 @@ class WeComNotificationSender:
         agent_id: int | str | None = None,
         secret: str | None = None,
         default_to_user: str | None = None,
+        max_content_chars: int = 500,
         timeout_seconds: float = 10.0,
         http_client_factory: Callable[[float], httpx.AsyncClient] | None = None,
     ) -> None:
@@ -207,6 +235,7 @@ class WeComNotificationSender:
         self._agent_id = str(agent_id).strip() if agent_id not in (None, "") else None
         self._secret = secret
         self._default_to_user = default_to_user
+        self._max_content_chars = max_content_chars
         self._timeout_seconds = timeout_seconds
         self._http_client_factory = http_client_factory
 
@@ -220,23 +249,22 @@ class WeComNotificationSender:
         except ValueError as exc:
             raise NotificationDeliveryError("企业微信 AgentId 必须是数字。") from exc
 
-        payload = {
-            "touser": to_user,
-            "msgtype": "text",
-            "agentid": agent_id,
-            "text": {
-                "content": f"{subject}\n\n{_markdown_to_text(body)}",
-            },
-            "safe": 0,
-        }
         access_token = await self._fetch_access_token()
-        await _post_json_checked(
-            f"https://qyapi.weixin.qq.com/cgi-bin/message/send?access_token={access_token}",
-            payload,
-            self._timeout_seconds,
-            http_client_factory=self._http_client_factory,
-            error_prefix="企业微信通知发送失败",
-        )
+        for content in _build_wecom_text_chunks(subject, body, max_chars=self._max_content_chars):
+            payload = {
+                "touser": to_user,
+                "msgtype": "text",
+                "agentid": agent_id,
+                "text": {"content": content},
+                "safe": 0,
+            }
+            await _post_json_checked(
+                f"https://qyapi.weixin.qq.com/cgi-bin/message/send?access_token={access_token}",
+                payload,
+                self._timeout_seconds,
+                http_client_factory=self._http_client_factory,
+                error_prefix="企业微信通知发送失败",
+            )
 
     async def _fetch_access_token(self) -> str:
         response = await _get_json_checked(

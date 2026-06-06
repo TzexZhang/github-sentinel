@@ -157,6 +157,36 @@ async def test_create_public_subscription_without_access_token(client):
     assert created["token_configured"] is False
 
 
+async def test_list_subscriptions_does_not_show_admin_data_to_new_user(anonymous_client):
+    admin_create = await anonymous_client.post(
+        "/api/auth/login",
+        json={"username": "admin", "password": "admin123"},
+    )
+    assert admin_create.status_code == 200
+    await anonymous_client.post(
+        "/api/subscriptions",
+        json={
+            "repository_url": "https://github.com/acme/admin-repo",
+            "interval_seconds": 120,
+        },
+    )
+    register = await anonymous_client.post(
+        "/api/auth/register",
+        json={"username": "alice_10", "password": "secret1"},
+    )
+    assert register.status_code == 201
+    login = await anonymous_client.post(
+        "/api/auth/login",
+        json={"username": "alice_10", "password": "secret1"},
+    )
+    assert login.status_code == 200
+
+    response = await anonymous_client.get("/api/subscriptions")
+
+    assert response.status_code == 200
+    assert response.json()["data"] == []
+
+
 async def test_create_gitee_subscription_from_git_url(client):
     response = await client.post(
         "/api/subscriptions",
@@ -447,7 +477,6 @@ async def test_delete_subscription_removes_related_events_reports_notification_j
                 report_id=report.id,
                 notification_channel_id=channel.id,
                 subject=report.name,
-                body_markdown=report.content_markdown,
                 dedupe_key=f"{report.id}:{channel.id}",
             ),
         )

@@ -84,7 +84,7 @@ async def test_wecom_sender_requires_application_configuration():
         await sender.send(channel, "Daily report", "# body")
 
 
-async def test_wecom_sender_sends_application_text_to_channel_target():
+async def test_wecom_sender_sends_full_text_split_into_multiple_messages():
     requests: list[tuple[str, dict[str, object]]] = []
 
     async def handler(request: httpx.Request) -> httpx.Response:
@@ -99,6 +99,7 @@ async def test_wecom_sender_sends_application_text_to_channel_target():
         agent_id="1000002",
         secret="secret-1",
         default_to_user="fallback-user",
+        max_content_chars=40,
         http_client_factory=lambda timeout: httpx.AsyncClient(
             transport=httpx.MockTransport(handler),
             timeout=timeout,
@@ -106,23 +107,25 @@ async def test_wecom_sender_sends_application_text_to_channel_target():
     )
     channel = NotificationChannel(name="repo-alerts", channel_type="wecom", target="zhangtengying")
 
-    await sender.send(channel, "Daily report", "# 标题\n\n- **完成** [任务](https://example.com)")
+    long_body = "# 标题\n\n- 第一项完整内容\n- 第二项完整内容\n- 第三项完整内容\n- 第四项完整内容"
+
+    await sender.send(channel, "Daily report", long_body)
 
     assert requests[0][0] == (
         "https://qyapi.weixin.qq.com/cgi-bin/gettoken?corpid=corp-1&corpsecret=secret-1"
     )
-    assert requests[1] == (
-        "https://qyapi.weixin.qq.com/cgi-bin/message/send?access_token=token-1",
-        {
-            "touser": "zhangtengying",
-            "msgtype": "text",
-            "agentid": 1000002,
-            "text": {
-                "content": "Daily report\n\n标题\n\n- 完成 任务 (https://example.com)",
-            },
-            "safe": 0,
-        },
-    )
+    sent_payloads = [payload for _, payload in requests[1:]]
+    assert len(sent_payloads) > 1
+    assert all(payload["touser"] == "zhangtengying" for payload in sent_payloads)
+    assert all(len(payload["text"]["content"]) <= 40 for payload in sent_payloads)
+    sent_text = "\n".join(str(payload["text"]["content"]) for payload in sent_payloads)
+    assert "Daily report" in sent_text
+    assert "标题" in sent_text
+    assert "第一项完整内容" in sent_text
+    assert "第二项完整内容" in sent_text
+    assert "第三项完整内容" in sent_text
+    assert "第四项完整内容" in sent_text
+    assert "完整报告请登录 Git Sentinel 报告中心查看" not in sent_text
 
 
 async def test_wecom_sender_uses_default_to_user_when_channel_target_is_blank():

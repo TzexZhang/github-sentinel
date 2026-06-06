@@ -26,7 +26,7 @@ def load_project_config() -> dict[str, object]:
         return tomllib.load(config_file)
 
 
-# project_config 示例：{'app': {'name': 'GitHub Sentinel'}, 'database': {'url': 'sqlite+aiosqlite:///./github_sentinel.db'}}
+# project_config 示例：{'app': {'name': 'Git Sentinel'}, 'database': {'url': 'sqlite+aiosqlite:///./github_sentinel.db'}}
 project_config = load_project_config()  
 app_config = project_config.get("app", {})  # 读取指定配置段，不存在时使用默认值
 database_config = project_config.get("database", {})
@@ -43,7 +43,7 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
     # 非敏感默认值来自配置文件，敏感项仍由环境变量注入。
-    app_name: str = str(app_config.get("name", "GitHub Sentinel"))
+    app_name: str = str(app_config.get("name", "Git Sentinel"))
     database_url: str = str(
         database_config.get("url", "sqlite+aiosqlite:///./github_sentinel.db"),
     )
@@ -84,6 +84,10 @@ class Settings(BaseSettings):
     notification_timeout_seconds: float = Field(default=10.0, ge=1.0)
     notification_worker_enabled: bool = False
     notification_worker_tick_seconds: int = Field(default=30, ge=1)
+    auth_cookie_name: str = "github_sentinel_session"
+    auth_session_days: int = Field(default=7, ge=1)
+    admin_username: str = "admin"
+    admin_password: str = Field(default="admin123", repr=False)
 
     @property
     def resolved_llm_api_key(self) -> str | None:
