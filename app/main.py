@@ -37,6 +37,7 @@ from app.db.migrations import (
     ensure_notification_channel_table,
     ensure_notification_job_table,
     ensure_report_table,
+    ensure_repository_events_table,
     ensure_subscription_columns,
 )
 # engine: SQLAlchemy 异步数据库引擎，管理连接池并执行 SQL 语句
@@ -68,6 +69,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         await connection.run_sync(Base.metadata.create_all)
         await ensure_subscription_columns(connection)
         await ensure_report_table(connection)
+        await ensure_repository_events_table(connection)
         await ensure_notification_channel_table(connection)
         await ensure_notification_job_table(connection)
     async with AsyncSessionLocal() as session:

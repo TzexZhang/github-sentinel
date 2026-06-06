@@ -4,6 +4,7 @@ from sqlalchemy.ext.asyncio import create_async_engine
 from app.db.migrations import (
     ensure_notification_channel_table,
     ensure_notification_job_table,
+    ensure_repository_events_table,
     ensure_subscription_columns,
 )
 
@@ -205,5 +206,91 @@ async def test_notification_job_migration_removes_body_markdown_and_adds_pending
     assert "body_markdown" not in columns
     assert "ix_notification_jobs_status_next_attempt_at" in indexes
     assert row_result.fetchone() == (1, 10, 20, "report", "20:30")
+
+    await engine.dispose()
+
+
+async def test_repository_event_migration_replaces_global_external_id_unique_constraint():
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:", future=True)
+
+    async with engine.begin() as connection:
+        await connection.execute(
+            text(
+                """
+                CREATE TABLE repository_events (
+                    id INTEGER NOT NULL PRIMARY KEY,
+                    subscription_id INTEGER NOT NULL,
+                    event_type VARCHAR(50) NOT NULL,
+                    external_id VARCHAR(200) NOT NULL UNIQUE,
+                    title VARCHAR(300) NOT NULL,
+                    url VARCHAR(500) NOT NULL,
+                    occurred_at DATETIME NOT NULL
+                )
+                """,
+            ),
+        )
+        await connection.execute(
+            text(
+                """
+                INSERT INTO repository_events (
+                    id,
+                    subscription_id,
+                    event_type,
+                    external_id,
+                    title,
+                    url,
+                    occurred_at
+                )
+                VALUES (
+                    1,
+                    1,
+                    'PushEvent',
+                    'gitee:event-1',
+                    'first subscription event',
+                    'https://gitee.com/acme/repo/commit/1',
+                    '2026-06-03 08:56:44'
+                )
+                """,
+            ),
+        )
+
+        await ensure_repository_events_table(connection)
+
+        await connection.execute(
+            text(
+                """
+                INSERT INTO repository_events (
+                    subscription_id,
+                    event_type,
+                    external_id,
+                    title,
+                    url,
+                    occurred_at
+                )
+                VALUES (
+                    2,
+                    'PushEvent',
+                    'gitee:event-1',
+                    'second subscription event',
+                    'https://gitee.com/acme/repo/commit/1',
+                    '2026-06-03 08:56:44'
+                )
+                """,
+            ),
+        )
+        rows_result = await connection.execute(
+            text(
+                """
+                SELECT subscription_id, external_id, title
+                FROM repository_events
+                ORDER BY subscription_id
+                """,
+            ),
+        )
+
+    assert rows_result.fetchall() == [
+        (1, "gitee:event-1", "first subscription event"),
+        (2, "gitee:event-1", "second subscription event"),
+    ]
 
     await engine.dispose()

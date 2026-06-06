@@ -97,11 +97,14 @@ class RepositoryEvent(Base):
 
     # 从 GitHub 拉取到的原始仓库动态，external_id 用于幂等去重。
     __tablename__ = "repository_events"
+    __table_args__ = (
+        UniqueConstraint("subscription_id", "external_id", name="uq_repository_event_subscription_external"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     subscription_id: Mapped[int] = mapped_column(ForeignKey("subscriptions.id"), nullable=False)
     event_type: Mapped[str] = mapped_column(String(50), nullable=False)
-    external_id: Mapped[str] = mapped_column(String(200), nullable=False, unique=True)
+    external_id: Mapped[str] = mapped_column(String(200), nullable=False)
     title: Mapped[str] = mapped_column(String(300), nullable=False)
     url: Mapped[str] = mapped_column(String(500), nullable=False)
     occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)

@@ -22,7 +22,10 @@ async def store_new_repository_events(
 
     external_ids = [activity.external_id for activity in unique_activities]
     existing_result = await session.execute(
-        select(RepositoryEvent.external_id).where(RepositoryEvent.external_id.in_(external_ids)),
+        select(RepositoryEvent.external_id).where(
+            RepositoryEvent.subscription_id == subscription_id,
+            RepositoryEvent.external_id.in_(external_ids),
+        ),
     )
     existing_ids = set(existing_result.scalars().all())
 

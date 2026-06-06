@@ -58,6 +58,111 @@ async def ensure_report_table(connection: AsyncConnection) -> None:
     await connection.execute(text("CREATE INDEX ix_reports_period_end_date ON reports (period_end_date)"))
 
 
+async def ensure_repository_events_table(connection: AsyncConnection) -> None:
+    """Ensure repository events are deduplicated per subscription, not globally."""
+    result = await connection.execute(text("PRAGMA table_info(repository_events)"))
+    existing_columns = {row[1] for row in result.fetchall()}
+    if not existing_columns:
+        return
+
+    if existing_columns != {
+        "id",
+        "subscription_id",
+        "event_type",
+        "external_id",
+        "title",
+        "url",
+        "occurred_at",
+    }:
+        await _rebuild_repository_events_table(connection, existing_columns)
+        return
+
+    index_result = await connection.execute(text("PRAGMA index_list(repository_events)"))
+    has_subscription_external_unique = False
+    has_global_external_unique = False
+    for row in index_result.fetchall():
+        index_name = row[1]
+        is_unique = bool(row[2])
+        if not is_unique:
+            continue
+        info_result = await connection.execute(text(f"PRAGMA index_info('{index_name}')"))
+        indexed_columns = [info_row[2] for info_row in info_result.fetchall()]
+        if indexed_columns == ["subscription_id", "external_id"]:
+            has_subscription_external_unique = True
+        if indexed_columns == ["external_id"]:
+            has_global_external_unique = True
+
+    if has_subscription_external_unique and not has_global_external_unique:
+        return
+
+    await _rebuild_repository_events_table(connection, existing_columns)
+
+
+async def _rebuild_repository_events_table(
+    connection: AsyncConnection,
+    existing_columns: set[str],
+) -> None:
+    await connection.execute(text("DROP TABLE IF EXISTS repository_events_legacy"))
+    await connection.execute(text("ALTER TABLE repository_events RENAME TO repository_events_legacy"))
+    await connection.execute(text("DROP INDEX IF EXISTS ix_repository_events_external_id"))
+    await connection.execute(text("DROP INDEX IF EXISTS ix_repository_events_subscription_id"))
+    await connection.execute(
+        text(
+            """
+            CREATE TABLE repository_events (
+                id INTEGER NOT NULL PRIMARY KEY,
+                subscription_id INTEGER NOT NULL,
+                event_type VARCHAR(50) NOT NULL,
+                external_id VARCHAR(200) NOT NULL,
+                title VARCHAR(300) NOT NULL,
+                url VARCHAR(500) NOT NULL,
+                occurred_at DATETIME NOT NULL,
+                CONSTRAINT uq_repository_event_subscription_external
+                    UNIQUE (subscription_id, external_id),
+                FOREIGN KEY(subscription_id) REFERENCES subscriptions (id)
+            )
+            """,
+        ),
+    )
+    await connection.execute(
+        text(
+            """
+            CREATE INDEX IF NOT EXISTS ix_repository_events_subscription_id
+            ON repository_events (subscription_id)
+            """,
+        ),
+    )
+
+    required_columns = {"id", "subscription_id", "event_type", "external_id", "title", "url", "occurred_at"}
+    if required_columns.issubset(existing_columns):
+        await connection.execute(
+            text(
+                """
+                INSERT OR IGNORE INTO repository_events (
+                    id,
+                    subscription_id,
+                    event_type,
+                    external_id,
+                    title,
+                    url,
+                    occurred_at
+                )
+                SELECT
+                    id,
+                    subscription_id,
+                    event_type,
+                    external_id,
+                    title,
+                    url,
+                    occurred_at
+                FROM repository_events_legacy
+                """,
+            ),
+        )
+
+    await connection.execute(text("DROP TABLE repository_events_legacy"))
+
+
 async def ensure_notification_channel_table(connection: AsyncConnection) -> None:
     """确保通知通道名称不再是全局唯一，通道归属由订阅绑定表表达。"""
     result = await connection.execute(text("PRAGMA table_info(notification_channels)"))
