@@ -288,7 +288,12 @@ class SentinelAgent:
         if not send_notification:
             return result, report
 
-        jobs = await create_notification_jobs_for_report(session, subscription, report)
+        jobs = await create_notification_jobs_for_report(
+            session,
+            subscription,
+            report,
+            allow_duplicate=True,
+        )
         await session.commit()
         return (
             SentinelRunResult(

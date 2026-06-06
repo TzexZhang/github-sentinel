@@ -337,6 +337,93 @@ async def test_manual_historical_existing_report_creates_notification_jobs_when_
     await engine.dispose()
 
 
+async def test_manual_historical_existing_report_creates_new_notification_job_when_requested_again():
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:", future=True)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+
+    async with session_factory() as session:
+        subscription = Subscription(
+            platform="github",
+            owner="acme",
+            repo="sentinel",
+            repository_url="https://github.com/acme/sentinel",
+            interval_seconds=86_400,
+        )
+        channel = NotificationChannel(
+            name="team-mail",
+            channel_type="smtp",
+            target="team@example.com",
+        )
+        session.add_all([subscription, channel])
+        await session.commit()
+        await session.refresh(subscription)
+        await session.refresh(channel)
+        report = Report(
+            subscription_id=subscription.id,
+            name="acme_sentinel_2026-06-01_2026-06-02",
+            content_markdown="# report",
+            generated_at=datetime(2026, 6, 2, tzinfo=timezone.utc),
+            period_start_date=datetime(2026, 6, 1, tzinfo=timezone.utc).date(),
+            period_end_date=datetime(2026, 6, 2, tzinfo=timezone.utc).date(),
+        )
+        session.add_all(
+            [
+                report,
+                SubscriptionNotificationChannel(
+                    subscription_id=subscription.id,
+                    notification_channel_id=channel.id,
+                ),
+            ],
+        )
+        await session.commit()
+        await session.refresh(report)
+        existing_job = NotificationJob(
+            subscription_id=subscription.id,
+            report_id=report.id,
+            notification_channel_id=channel.id,
+            subject=report.name,
+            dedupe_key=f"{report.id}:{channel.id}",
+            status="sent",
+        )
+        session.add(existing_job)
+        await session.commit()
+
+        agent = SentinelAgent(
+            github_client=FakeGitHubClient([]),
+            report_renderer=FakeReportRenderer(),
+            notification_sender=RecordingNotificationSender(),
+        )
+
+        result, returned_report = await agent.generate_report_for_date_range(
+            session,
+            subscription.id,
+            report.period_start_date,
+            report.period_end_date,
+            send_notification=True,
+        )
+        jobs = list(
+            (
+                await session.execute(select(NotificationJob).order_by(NotificationJob.id))
+            )
+            .scalars()
+            .all(),
+        )
+
+    assert returned_report.id == report.id
+    assert result.notification_sent is True
+    assert [(job.report_id, job.notification_channel_id, job.status) for job in jobs] == [
+        (report.id, channel.id, "sent"),
+        (report.id, channel.id, "pending"),
+    ]
+    assert jobs[0].dedupe_key == f"{report.id}:{channel.id}"
+    assert jobs[1].dedupe_key != jobs[0].dedupe_key
+
+    await engine.dispose()
+
+
 async def test_sentinel_agent_overwrites_same_day_scheduled_report_when_new_events_arrive():
     engine = create_async_engine("sqlite+aiosqlite:///:memory:", future=True)
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
