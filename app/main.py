@@ -192,10 +192,18 @@ def create_app() -> FastAPI:
     async def login_page() -> str:
         return LOGIN_HTML
 
+    @app.get("/", include_in_schema=False)
+    async def root_redirect() -> RedirectResponse:
+        # 根路径默认进入 Dashboard;未登录会被 DashboardAuthMiddleware 转到 /login
+        return RedirectResponse("/dashboard", status_code=307)
+
     @app.get("/api/runtime")
     async def runtime_status() -> dict[str, object]:
-        """返回当前后端运行实例标识，供本地热重载后页面自动刷新。"""
-        return {"instance_id": APP_INSTANCE_ID}
+        """返回当前后端运行实例标识，供本地热重载后页面自动刷新。
+
+        debug 仅用于告知前端是否启用轮询；生产环境关闭后前端不会发起轮询。
+        """
+        return {"instance_id": APP_INSTANCE_ID, "debug": settings.debug}
 
     app.add_middleware(DashboardAuthMiddleware)
     app.add_middleware(RequestLoggingMiddleware)
@@ -210,12 +218,35 @@ app = create_app()
 
 
 async def _dashboard_session_is_valid(request: Request, token: str) -> bool:
+    """校验 Dashboard 会话令牌是否有效（供 DashboardAuthMiddleware 鉴权使用）。
+
+    该函数被 DashboardAuthMiddleware 在拦截 /dashboard 请求时调用，
+    用于判断 Cookie 中的 session token 是否对应一个真实存在的用户。
+    返回 True 则放行请求，否则中间件会重定向到 /login 登录页。
+
+    为兼容测试场景下通过 dependency_overrides 注入的测试用 session 工厂，
+    函数会优先使用覆盖的 get_session 依赖；未覆盖时则使用生产环境的
+    AsyncSessionLocal 直接创建会话。
+
+    参数:
+        request: 当前 HTTP 请求，用于读取 app.dependency_overrides 测试覆盖项。
+        token: 从 Cookie 中取出的会话令牌字符串。
+
+    返回:
+        True 表示 token 命中数据库中的用户会话；False 表示无效或过期。
+    """
+    # 测试场景下 FastAPI 会通过 dependency_overrides 替换 get_session，此处优先采用覆盖实现，
+    # 以确保集成测试使用 Mock 数据库而非真实连接
     override = request.app.dependency_overrides.get(get_session)
     if override is not None:
+        # 覆盖的 get_session 返回一个异步生成器，迭代一次取出其中唯一的 session
         async for session in override():
             return await get_user_by_session_token(session, token) is not None
+        # 若覆盖的依赖未产出任何 session（生成器为空），视为未通过鉴权
         return False
 
+    # 生产场景：直接从全局 AsyncSessionLocal 工厂创建一次性会话进行校验，
+    # 异步上下文管理器会在退出时自动关闭并归还连接到连接池
     async with AsyncSessionLocal() as session:
         return await get_user_by_session_token(session, token) is not None
 

@@ -272,6 +272,9 @@ const REPORT_MONTHS = {
 const REPORT_WEEKDAYS = {Su: "日", Mo: "一", Tu: "二", We: "三", Th: "四", Fr: "五", Sa: "六"};
 const REPORT_DATE_ACTIONS = {Clear: "清除", Now: "今天", Done: "完成"};
 const RUNTIME_INSTANCE_STORAGE_KEY = "git-sentinel-runtime-instance-id";
+// 后端热重载轮询开关：仅开发模式（DEBUG=true）启用，避免生产环境的无意义轮询。
+// 占位符由后端在构建页面时替换为 true / false。
+const RUNTIME_POLLING_ENABLED = __RUNTIME_POLLING_ENABLED__;
 
 function localizeReportCalendars() {
     document.querySelectorAll("*").forEach((node) => {
@@ -407,12 +410,14 @@ new MutationObserver(refreshReportDatePanels).observe(document.documentElement, 
     characterData: true,
 });
 window.addEventListener("load", refreshReportDatePanels);
-window.addEventListener("load", refreshPageAfterBackendReload);
 window.addEventListener("load", bindUserManagementPanel);
 window.addEventListener("click", () => setTimeout(bindUserManagementPanel, 0));
 window.addEventListener("resize", refreshReportDatePanels);
 window.addEventListener("click", () => setTimeout(refreshReportDatePanels, 0));
-window.setInterval(refreshPageAfterBackendReload, 1500);
+if (RUNTIME_POLLING_ENABLED) {
+    window.addEventListener("load", refreshPageAfterBackendReload);
+    window.setInterval(refreshPageAfterBackendReload, 1500);
+}
 </script>
 """
 
@@ -480,8 +485,13 @@ USER_MANAGEMENT_HTML = """
 def build_gradio_app() -> gr.Blocks:
     """构建 Git Sentinel 的 Gradio 可视化界面。"""
     default_start_date, default_end_date = default_week_date_range()
+    # 仅开发模式启用前端热重载轮询，生产环境替换为 false 以避免无意义轮询请求。
+    dashboard_head = REPORT_PREVIEW_HEAD.replace(
+        "__RUNTIME_POLLING_ENABLED__",
+        "true" if settings.debug else "false",
+    )
     with gr.Blocks(title="Git Sentinel Dashboard", fill_height=True) as ui:
-        gr.HTML("", head=REPORT_PREVIEW_HEAD)
+        gr.HTML("", head=dashboard_head)
         gr.Markdown("# Git Sentinel Dashboard")
         editing_subscription_id = gr.State(None)
 

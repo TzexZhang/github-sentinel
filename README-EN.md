@@ -240,6 +240,20 @@ The default SQLite database path is `./data/github_sentinel.db`. On first startu
 
 For Docker deployments, `docker-compose.yml` mounts host `./data` to container `/app/data` to persist the database file. Do not manually create an empty database file; if production already has an old database file, migrate it before switching `DATABASE_URL`.
 
+> ℹ️ **About the `-shm` / `-wal` auxiliary files**
+>
+> After starting the service, two companion files appear in `data/` alongside the main `github_sentinel.db`. These are normal artifacts of SQLite **WAL (Write-Ahead Logging) mode**, not redundant or junk files:
+>
+> | File | Purpose |
+> |------|---------|
+> | `github_sentinel.db` | Main database, stores all production data (**do not delete**) |
+> | `github_sentinel.db-wal` | Write-ahead log. Writes land here first, then are asynchronously merged back into the main DB, improving concurrency |
+> | `github_sentinel.db-shm` | Shared-memory index. Coordinates concurrent read/write access to the WAL across connections |
+>
+> WAL mode is enabled in the project (`PRAGMA journal_mode=WAL` in `app/db/session.py`) to avoid the `database is locked` write conflicts of SQLite's default mode. These three files form one set and **all are required at runtime**.
+>
+> **Note**: If you must remove `-shm` / `-wal`, **stop the service first** so SQLite can complete a checkpoint (merging WAL data back into the main DB); otherwise unwritten changes may be lost. The files will be regenerated automatically on the next startup because WAL mode stays on. For normal use, just leave them — they are ignored by `.gitignore` and do not affect version control.
+
 ### 6.3 Start The Service
 
 ```powershell

@@ -10,7 +10,7 @@ from app.services.auth import verify_password
 async def test_login_sets_http_only_session_cookie_for_seven_days(anonymous_client):
     response = await anonymous_client.post(
         "/api/auth/login",
-        json={"username": "admin", "password": "admin123"},
+        json={"username": "admin", "password": "123456"},
     )
 
     assert response.status_code == 200
@@ -32,7 +32,7 @@ async def test_protected_subscription_endpoint_rejects_missing_session(anonymous
 async def test_me_returns_current_user_after_cookie_login(anonymous_client):
     login_response = await anonymous_client.post(
         "/api/auth/login",
-        json={"username": "admin", "password": "admin123"},
+        json={"username": "admin", "password": "123456"},
     )
 
     assert login_response.status_code == 200
@@ -45,7 +45,7 @@ async def test_me_returns_current_user_after_cookie_login(anonymous_client):
 async def test_logout_revokes_session_cookie(anonymous_client):
     await anonymous_client.post(
         "/api/auth/login",
-        json={"username": "admin", "password": "admin123"},
+        json={"username": "admin", "password": "123456"},
     )
 
     logout_response = await anonymous_client.post("/api/auth/logout")
@@ -58,16 +58,16 @@ async def test_logout_revokes_session_cookie(anonymous_client):
 async def test_change_password_updates_hash_and_allows_new_login(anonymous_client, session_factory):
     await anonymous_client.post(
         "/api/auth/login",
-        json={"username": "admin", "password": "admin123"},
+        json={"username": "admin", "password": "123456"},
     )
 
     response = await anonymous_client.post(
         "/api/auth/change-password",
-        json={"old_password": "admin123", "new_password": "new123"},
+        json={"old_password": "123456", "new_password": "new123"},
     )
     old_login = await anonymous_client.post(
         "/api/auth/login",
-        json={"username": "admin", "password": "admin123"},
+        json={"username": "admin", "password": "123456"},
     )
     new_login = await anonymous_client.post(
         "/api/auth/login",
@@ -87,7 +87,7 @@ async def test_change_password_updates_hash_and_allows_new_login(anonymous_clien
 async def test_change_password_rejects_wrong_current_password(anonymous_client):
     await anonymous_client.post(
         "/api/auth/login",
-        json={"username": "admin", "password": "admin123"},
+        json={"username": "admin", "password": "123456"},
     )
 
     response = await anonymous_client.post(
@@ -102,12 +102,12 @@ async def test_change_password_rejects_wrong_current_password(anonymous_client):
 async def test_change_password_validates_new_password_length(anonymous_client):
     await anonymous_client.post(
         "/api/auth/login",
-        json={"username": "admin", "password": "admin123"},
+        json={"username": "admin", "password": "123456"},
     )
 
     response = await anonymous_client.post(
         "/api/auth/change-password",
-        json={"old_password": "admin123", "new_password": "short"},
+        json={"old_password": "123456", "new_password": "short"},
     )
 
     assert response.status_code == 422

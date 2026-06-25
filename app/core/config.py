@@ -87,7 +87,11 @@ class Settings(BaseSettings):
     auth_cookie_name: str = "github_sentinel_session"
     auth_session_days: int = Field(default=7, ge=1)
     admin_username: str = "admin"
-    admin_password: str = Field(default="admin123", repr=False)
+    admin_password: str = Field(default="123456", repr=False)
+    # 调试模式开关：开启后启用前端热重载轮询等开发期特性。
+    # 生产环境应保持 false，避免无意义的轮询请求。
+    # 通过环境变量 DEBUG 注入（true/false）。
+    debug: bool = False
 
     @property
     def resolved_llm_api_key(self) -> str | None:

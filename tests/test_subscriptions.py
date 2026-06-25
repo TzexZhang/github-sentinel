@@ -160,7 +160,7 @@ async def test_create_public_subscription_without_access_token(client):
 async def test_list_subscriptions_does_not_show_admin_data_to_new_user(anonymous_client):
     admin_create = await anonymous_client.post(
         "/api/auth/login",
-        json={"username": "admin", "password": "admin123"},
+        json={"username": "admin", "password": "123456"},
     )
     assert admin_create.status_code == 200
     await anonymous_client.post(
