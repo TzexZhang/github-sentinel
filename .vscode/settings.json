@@ -1,0 +1,11 @@
+{
+  // 固定使用项目虚拟环境解释器，避免误选全局 Python 导致断点失效或依赖缺失
+  "python.defaultInterpreterPath": "${workspaceFolder}/.venv/Scripts/python.exe",
+  // 测试用 pytest
+  "python.testing.pytestEnabled": true,
+  "python.testing.pytestArgs": ["tests"],
+  // 保存时自动格式化（可选）
+  "[python]": {
+    "editor.defaultFormatter": "charliermarsh.ruff"
+  }
+}

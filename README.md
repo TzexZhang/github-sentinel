@@ -117,6 +117,13 @@ uv run python scripts/dev.py
 
 > 💡 **关于热重载**:本项目不使用 uvicorn 的 `--reload`——它在 Windows 上会卡死在 `Waiting for connections to close`(uvicorn 已知缺陷)。改完代码后请手动停止(Ctrl+C)再重新运行上述命令。`scripts/dev.py` 已内置优雅关闭超时(`--timeout-graceful-shutdown 3`),正常情况下按一次 Ctrl+C 即可停止;若残留连接导致短暂等待,连按两次 Ctrl+C 可立即强退。
 
+> 🐛 **断点调试**:本项目的启动脚本在**当前进程内**运行 uvicorn(非子进程),因此命令行运行和 VSCode 调试命中相同的代码。在 VSCode 中:
+> 1. 在代码行号左侧点击设置断点(红点)
+> 2. 按 `F5` 选择「调试整个项目」配置(已内置在 `.vscode/launch.json`)
+> 3. 触发请求时,执行会停在断点上
+>
+> 调试与命令行启动共用同一个 `scripts/dev.py` 入口,行为完全一致,无需切换配置。调试前请先停掉已运行的服务,避免端口冲突。
+
 启动后访问:
 
 | 页面/接口 | 地址 |

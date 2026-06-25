@@ -1,0 +1,32 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "调试整个项目",
+      "type": "debugpy",
+      "request": "launch",
+      // 运行 scripts/dev.py —— 与命令行 `uv run python scripts/dev.py` 完全同一个入口
+      // 进程内启动 uvicorn，断点可稳定命中
+      "program": "${workspaceFolder}/scripts/dev.py",
+      "python": "${command:python.interpreterPath}",
+      "args": [],
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      // false = 允许断点停在第三方库（fastapi/sqlalchemy 等）内部，便于深挖问题
+      "justMyCode": false,
+      // 注入 .env，让调试时读取本地配置（数据库、API Key 等）
+      "envFile": "${workspaceFolder}/.env"
+    },
+    {
+      "name": "调试单个测试 (pytest)",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "pytest",
+      "python": "${command:python.interpreterPath}",
+      "args": ["${file}", "-v"],
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "justMyCode": false
+    }
+  ]
+}
