@@ -59,7 +59,7 @@ async def test_list_subscription_reports_returns_selected_repository_markdown_re
         )
         await session.commit()
         first_id = first.id
-        await ensure_default_admin(session, "admin", "admin123")
+        await ensure_default_admin(session, "admin", "123456")
 
     async def override_get_session() -> AsyncIterator[AsyncSession]:
         async with session_factory() as session:
@@ -72,7 +72,7 @@ async def test_list_subscription_reports_returns_selected_repository_markdown_re
     async with AsyncClient(transport=transport, base_url="http://testserver") as client:
         login_response = await client.post(
             "/api/auth/login",
-            json={"username": "admin", "password": "admin123"},
+            json={"username": "admin", "password": "123456"},
         )
         assert login_response.status_code == 200
         response = await client.get(f"/api/subscriptions/{first_id}/reports")

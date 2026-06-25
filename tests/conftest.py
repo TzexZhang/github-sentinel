@@ -40,7 +40,7 @@ async def anonymous_client(session_factory) -> AsyncIterator[AsyncClient]:
 async def client(anonymous_client: AsyncClient) -> AsyncIterator[AsyncClient]:
     response = await anonymous_client.post(
         "/api/auth/login",
-        json={"username": "admin", "password": "admin123"},
+        json={"username": "admin", "password": "123456"},
     )
     assert response.status_code == 200
     yield anonymous_client

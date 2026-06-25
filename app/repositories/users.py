@@ -6,7 +6,17 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.db.models import User, UserSession
-from app.services.auth import hash_password, hash_session_token, session_expiry, verify_password
+from app.services.auth import (
+    hash_password,
+    hash_session_token,
+    session_expiry,
+    verify_password,
+)
+
+# 会话活跃时间戳刷新节流阈值（秒）。
+# 每个请求都 UPDATE last_seen_at 会在 SQLite 上引发锁争用，因此仅在距上次刷新
+# 超过该阈值时才写库；不影响会话有效性判定，仅影响「最近活跃」展示精度。
+SESSION_LAST_SEEN_FLUSH_SECONDS = 300
 
 
 async def create_user(
@@ -57,7 +67,9 @@ async def get_user_by_username(session: AsyncSession, username: str) -> User | N
     return result.scalar_one_or_none()
 
 
-async def authenticate_user(session: AsyncSession, username: str, password: str) -> User | None:
+async def authenticate_user(
+    session: AsyncSession, username: str, password: str
+) -> User | None:
     """校验用户名、账号状态和密码，成功时返回用户。"""
     user = await get_user_by_username(session, username)
     if user is None or not user.is_active:
@@ -100,7 +112,9 @@ async def create_user_session(
     return user_session
 
 
-async def get_user_by_session_token(session: AsyncSession, raw_token: str) -> User | None:
+async def get_user_by_session_token(
+    session: AsyncSession, raw_token: str
+) -> User | None:
     """根据原始会话令牌查找仍有效的登录用户。"""
     result = await session.execute(
         select(UserSession)
@@ -120,15 +134,29 @@ async def get_user_by_session_token(session: AsyncSession, raw_token: str) -> Us
     if not stored_session.user.is_active:
         return None
 
-    stored_session.last_seen_at = now
-    await session.commit()
+    # 节流 last_seen_at 写入：SQLite 默认串行写，每次请求都 UPDATE 会引发
+    # database is locked；活跃记录每 SESSION_LAST_SEEN_FLUSH_SECONDS 秒刷新一次即可。
+    # [假设] last_seen_at 精度到分钟级足够满足「最近活跃」展示需求 — 需业务确认
+    last_seen = stored_session.last_seen_at
+    if last_seen is None or (now - _normalize_utc(last_seen)).total_seconds() >= SESSION_LAST_SEEN_FLUSH_SECONDS:
+        stored_session.last_seen_at = now
+        await session.commit()
     return stored_session.user
+
+
+def _normalize_utc(value: datetime) -> datetime:
+    """将可能缺省时区的 datetime 统一为 UTC 偏移感知类型。"""
+    if value.tzinfo is None:
+        return value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)
 
 
 async def revoke_session_token(session: AsyncSession, raw_token: str) -> None:
     """撤销指定会话令牌，后续请求需要重新登录。"""
     result = await session.execute(
-        select(UserSession).where(UserSession.token_hash == hash_session_token(raw_token)),
+        select(UserSession).where(
+            UserSession.token_hash == hash_session_token(raw_token)
+        ),
     )
     stored_session = result.scalar_one_or_none()
     if stored_session is None:

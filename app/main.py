@@ -192,10 +192,18 @@ def create_app() -> FastAPI:
     async def login_page() -> str:
         return LOGIN_HTML
 
+    @app.get("/", include_in_schema=False)
+    async def root_redirect() -> RedirectResponse:
+        # 根路径默认进入 Dashboard;未登录会被 DashboardAuthMiddleware 转到 /login
+        return RedirectResponse("/dashboard", status_code=307)
+
     @app.get("/api/runtime")
     async def runtime_status() -> dict[str, object]:
-        """返回当前后端运行实例标识，供本地热重载后页面自动刷新。"""
-        return {"instance_id": APP_INSTANCE_ID}
+        """返回当前后端运行实例标识，供本地热重载后页面自动刷新。
+
+        debug 仅用于告知前端是否启用轮询；生产环境关闭后前端不会发起轮询。
+        """
+        return {"instance_id": APP_INSTANCE_ID, "debug": settings.debug}
 
     app.add_middleware(DashboardAuthMiddleware)
     app.add_middleware(RequestLoggingMiddleware)
