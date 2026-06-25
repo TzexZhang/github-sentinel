@@ -100,7 +100,8 @@ def build_email_message(
     message["Subject"] = subject
     message["From"] = from_email
     message["To"] = channel.target
-    message.set_content(_markdown_to_email_html(body_markdown), subtype="html")
+    message.set_content(_markdown_to_text(body_markdown))
+    message.add_alternative(_markdown_to_email_html(body_markdown), subtype="html")
     return message
 
 

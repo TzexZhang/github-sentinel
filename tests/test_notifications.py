@@ -65,15 +65,34 @@ def test_build_email_message_uses_rendered_html_body():
         body_markdown="# 标题\n\n## 进展\n\n- **完成** [任务](https://example.com)\n- 修复问题",
     )
 
-    content = message.get_content()
+    content = list(message.iter_parts())[1].get_content()
 
-    assert message.get_content_type() == "text/html"
+    assert message.get_content_type() == "multipart/alternative"
     assert "# 标题" not in content
     assert "<h1>标题</h1>" in content
     assert "<h2>进展</h2>" in content
     assert "<ul>" in content
     assert "<strong>完成</strong>" in content
     assert '<a href="https://example.com">任务</a>' in content
+
+
+def test_build_email_message_includes_plain_text_fallback():
+    channel = NotificationChannel(name="team-mail", channel_type="smtp", target="team@example.com")
+
+    message = build_email_message(
+        channel=channel,
+        from_email="sender@example.com",
+        subject="Daily report",
+        body_markdown="# title\n\n- **Done** [Task](https://example.com)",
+    )
+
+    plain_part, html_part = message.iter_parts()
+
+    assert message.get_content_type() == "multipart/alternative"
+    assert plain_part.get_content_type() == "text/plain"
+    assert html_part.get_content_type() == "text/html"
+    assert "- Done Task (https://example.com)" in plain_part.get_content()
+    assert "<strong>Done</strong>" in html_part.get_content()
 
 
 async def test_wecom_sender_requires_application_configuration():

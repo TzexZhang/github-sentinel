@@ -4,7 +4,7 @@ from datetime import date, datetime, timedelta
 
 import gradio as gr
 
-from app.api.deps import build_sentinel_agent
+from app.api.deps import build_notification_router, build_sentinel_agent
 from app.core.config import settings
 from app.core.errors import ApiError
 from app.db.models import Report, Subscription
@@ -26,6 +26,7 @@ from app.schemas.subscriptions import (
 )
 from app.services.time_utils import format_report_datetime
 from app.services.time_utils import report_now
+from app.services.notification_worker import NotificationWorker
 
 REPORT_WINDOW_CHOICES = [
     ("一天内", "1d"),
@@ -630,6 +631,8 @@ def build_gradio_app() -> gr.Blocks:
             )
             with gr.Row():
                 refresh_report_management_button = gr.Button("刷新管理列表")
+                select_all_reports_button = gr.Button("全部勾选")
+                clear_report_selection_button = gr.Button("取消勾选")
                 delete_reports_button = gr.Button("删除选中报告", variant="stop")
 
         with gr.Tab("用户管理"):
@@ -728,6 +731,8 @@ def build_gradio_app() -> gr.Blocks:
                 report_generated_at,
                 report_markdown,
                 *subscription_form_outputs,
+                report_management_status,
+                report_management_choices,
             ],
             queue=False,
         )
@@ -771,6 +776,16 @@ def build_gradio_app() -> gr.Blocks:
             outputs=[report_management_status, report_management_choices],
             queue=False,
         )
+        select_all_reports_button.click(
+            select_all_report_management_for_ui,
+            outputs=[report_management_choices],
+            queue=False,
+        )
+        clear_report_selection_button.click(
+            clear_report_management_selection,
+            outputs=[report_management_choices],
+            queue=False,
+        )
         delete_reports_button.click(
             delete_reports_from_ui,
             inputs=[report_management_choices],
@@ -808,6 +823,20 @@ async def refresh_report_management_for_ui(request: gr.Request):
         f"当前共有 {len(reports)} 份报告。",
         gr.update(choices=format_report_management_choices(reports), value=[]),
     )
+
+
+async def select_all_report_management_for_ui(request: gr.Request):
+    """勾选当前用户可见的全部报告。"""
+    user_id = await _current_user_id_from_request(request)
+    if user_id is None:
+        return gr.update(value=[])
+    reports = await _list_reports(user_id=user_id)
+    return gr.update(value=[report.id for report in reports])
+
+
+def clear_report_management_selection():
+    """清空报告管理列表中的勾选项。"""
+    return gr.update(value=[])
 
 
 async def delete_reports_from_ui(report_ids: list[int | str] | None, request: gr.Request):
@@ -974,8 +1003,15 @@ async def generate_report_from_ui(
         reports = await _list_reports(int(subscription_id), user_id=user_id)
         status = f"报告生成成功：{report.name}"
         if send_notification:
+            worker_result = (
+                await _dispatch_pending_notifications_once()
+                if result.notification_sent
+                else None
+            )
             status = (
-                f"报告生成成功并已加入通知队列：{report.name}"
+                f"报告生成成功并已发送通知：{report.name}"
+                if worker_result is not None and worker_result.sent > 0
+                else f"报告生成成功并已加入通知队列：{report.name}"
                 if result.notification_sent
                 else f"报告生成成功，但该订阅没有启用通知通道：{report.name}"
             )
@@ -1125,11 +1161,14 @@ async def delete_subscription_from_ui(subscription_id: int | None, request: gr.R
             "报告生成时间：未选择报告",
             "请选择左侧报告后查看内容。",
             *_subscription_form_output_values(_subscription_form_noop_updates()),
+            "请重新登录后查看报告。",
+            gr.update(choices=[], value=[]),
         )
     if subscription_id is not None:
         async with AsyncSessionLocal() as session:
             await delete_subscription(session, int(subscription_id), user_id=user_id)
     subscriptions = await _list_subscriptions(user_id)
+    reports = await _list_reports(user_id=user_id)
     return (
         "订阅已删除。" if subscription_id is not None else "请先选择订阅仓库。",
         format_subscription_rows(subscriptions),
@@ -1138,6 +1177,8 @@ async def delete_subscription_from_ui(subscription_id: int | None, request: gr.R
         "报告生成时间：未选择报告",
         "请选择左侧报告后查看内容。",
         *_subscription_form_output_values(_empty_subscription_form_updates()),
+        f"当前共有 {len(reports)} 份报告。",
+        gr.update(choices=format_report_management_choices(reports), value=[]),
     )
 
 
@@ -1181,7 +1222,7 @@ def format_report_management_choices(reports: list[Report]) -> list[tuple[str, i
     """格式化报告管理复选项。"""
     return [
         (
-            f"#{report.id} {_report_repo_name(report)}（{_report_period_label(report)}）"
+            f"{_report_repo_name(report)}（{_report_period_label(report)}）"
             f" - {format_report_datetime(report.generated_at)}",
             report.id,
         )
@@ -1242,6 +1283,15 @@ async def _list_reports(
             generated_since=generated_since,
             generated_before=generated_before,
         )
+
+
+async def _dispatch_pending_notifications_once():
+    worker = NotificationWorker(
+        session_factory=AsyncSessionLocal,
+        notification_sender=build_notification_router(),
+        tick_seconds=settings.notification_worker_tick_seconds,
+    )
+    return await worker.run_pending_once()
 
 
 def _resolve_report_window(

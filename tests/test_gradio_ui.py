@@ -7,6 +7,7 @@ from app.db.models import Report, Subscription
 from app.ui.gradio_app import (
     _empty_subscription_form_updates,
     _notification_channels_from_ui,
+    clear_report_management_selection,
     _selected_delete_subscription_id,
     _selected_edit_subscription_id,
     _subscription_edit_form_updates,
@@ -19,6 +20,7 @@ from app.ui.gradio_app import (
     load_report_content_for_ui,
     load_reports_for_ui,
     parse_ui_date,
+    select_all_report_management_for_ui,
 )
 
 
@@ -401,8 +403,63 @@ def test_format_report_management_choices_includes_id_repo_period_and_generated_
     ]
 
     assert format_report_management_choices(reports) == [
-        ("#7 sentinel（2026-06-01~2026-06-03） - 2026-06-01 09:30:00", 7),
+        ("sentinel（2026-06-01~2026-06-03） - 2026-06-01 09:30:00", 7),
     ]
+
+
+def test_format_report_management_choices_omits_id_prefix():
+    report = Report(
+        id=7,
+        subscription_id=1,
+        name="acme_sentinel_2026-06-01",
+        content_markdown="# report",
+        generated_at=datetime(2026, 6, 1, 9, 30),
+        period_start_date=date(2026, 6, 1),
+        period_end_date=date(2026, 6, 3),
+    )
+
+    label, value = format_report_management_choices([report])[0]
+
+    assert value == 7
+    assert not label.startswith("#7 ")
+
+
+async def test_select_all_report_management_for_ui_selects_current_user_reports(monkeypatch):
+    seen = {}
+
+    async def fake_current_user_id(_request):
+        return 2
+
+    async def fake_list_reports(*, user_id):
+        seen["user_id"] = user_id
+        return [
+            Report(
+                id=7,
+                subscription_id=1,
+                name="acme_sentinel_2026-06-01",
+                content_markdown="# report",
+                generated_at=datetime(2026, 6, 1, 9, 30),
+            ),
+            Report(
+                id=8,
+                subscription_id=1,
+                name="acme_sentinel_2026-06-02",
+                content_markdown="# report",
+                generated_at=datetime(2026, 6, 2, 9, 30),
+            ),
+        ]
+
+    monkeypatch.setattr(gradio_app, "_current_user_id_from_request", fake_current_user_id)
+    monkeypatch.setattr(gradio_app, "_list_reports", fake_list_reports)
+
+    selection = await select_all_report_management_for_ui(object())
+
+    assert seen["user_id"] == 2
+    assert selection["value"] == [7, 8]
+
+
+def test_clear_report_management_selection_returns_empty_selection():
+    assert clear_report_management_selection()["value"] == []
 
 
 async def test_refresh_subscriptions_for_ui_uses_current_user(monkeypatch):
@@ -444,6 +501,47 @@ async def test_refresh_report_management_for_ui_uses_current_user(monkeypatch):
     assert seen["user_id"] == 2
     assert status == "当前共有 0 份报告。"
     assert choices["choices"] == []
+
+
+async def test_delete_subscription_from_ui_refreshes_report_management(monkeypatch):
+    seen = {}
+
+    class FakeSession:
+        async def __aenter__(self):
+            return "session"
+
+        async def __aexit__(self, exc_type, exc, traceback):
+            return False
+
+    async def fake_current_user_id(_request):
+        return 2
+
+    async def fake_delete_subscription(session, subscription_id, user_id):
+        seen["delete"] = (session, subscription_id, user_id)
+
+    async def fake_list_subscriptions(user_id):
+        seen["subscriptions_user_id"] = user_id
+        return []
+
+    async def fake_list_reports(*, user_id):
+        seen["reports_user_id"] = user_id
+        return []
+
+    monkeypatch.setattr(gradio_app, "_current_user_id_from_request", fake_current_user_id)
+    monkeypatch.setattr(gradio_app, "delete_subscription", fake_delete_subscription)
+    monkeypatch.setattr(gradio_app, "_list_subscriptions", fake_list_subscriptions)
+    monkeypatch.setattr(gradio_app, "_list_reports", fake_list_reports)
+    monkeypatch.setattr(gradio_app, "AsyncSessionLocal", FakeSession)
+
+    result = await gradio_app.delete_subscription_from_ui(12, object())
+
+    assert seen == {
+        "delete": ("session", 12, 2),
+        "subscriptions_user_id": 2,
+        "reports_user_id": 2,
+    }
+    assert result[-2] == "当前共有 0 份报告。"
+    assert result[-1]["choices"] == []
 
 
 async def test_delete_reports_from_ui_deletes_only_current_user_reports(monkeypatch):
